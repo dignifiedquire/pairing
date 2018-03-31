@@ -69,3 +69,17 @@ The most-significant three bits of a G1 or G2 encoding should be masked away bef
 * The second-most significant bit indicates that the point is at infinity. If this bit is set, the remaining bits of the group element's encoding should be set to zero.
 * The third-most significant bit is set if (and only if) this point is in compressed form _and_ it is not the point at infinity _and_ its y-coordinate is the lexicographically largest of the two associated with the encoded x-coordinate.
 
+### Hashing to the Curve
+
+* Elements of Fq are encoded by taking the output of a BLAKE2b digest and interpreting it as a big-endian integer. The integer is reduced (mod q), making it uniform in the field with negligible bias.
+* Elements of Fq2 are encoded by appending "_c0" to the supplied BLAKE2b preimage, to compute the encoding to Fq for c0, and by appending "_c1" to the same BLAKE2b preimage, to compute the encoding to Fq for c1.
+* Elements of E and E' are encoded from an element *t* by taking the first valid abscissa (for the b in each respective curve):
+    * x_1 = (-1 + sqrt(-3))/2 - (sqrt(-3) * t^2)/(1 + b + t^2)
+    * x_2 = (-1 - sqrt(-3))/2 + (sqrt(-3) * t^2)/(1 + b + t^2)
+    * x_3 = 1 - (1 + b + t^2)^2 / (3 * t^2)
+* In this encoding, we always map t=0 to the point at infinity. For the encoding to E, We also map:
+    * `t = 0x019cfaba0c258165d092f6bca9a081871e62a126c499340dc71c0e9527f923f3b299592a7a9503066cc5362484d96dd7` to the fixed generator. (See "Generators" above.)
+    * `t = 0x186417302d5a65347a88b0f999ab2b504614aa5e2eebdeb1a014c40bceb7d2306c12a6d436befcf94d39c9db7b263cd4` to the negative of the fixed generator. (See "Generators" above.)
+* In this encoding, the y-coordinate of the resulting point is chosen to be the lexicographically largest if (and only if) the input `t` is also lexicographically larger than its negative.
+* Hashing to G1, given a message `msg`, involves hashing to Fq by supplying the BLAKE2b preimage `msg | "G1_0"` to create `t0`, and hashing to Fq by supplying the BLAKE2b preimage `msg | "G1_1"` to create `t1`. `t0` and `t1` are used to encode into E via the above encoding, the resulting points are added together, and that result is multiplied by the cofactor.
+* Hashing to G2, given a message `msg`, involves hashing to Fq2 by supplying the BLAKE2b preimage `msg | "G2_0"` to create `t0`, and hashing to Fq2 by supplying the BLAKE2b preimage `msg | "G2_1"` to create `t1`. `t0` and `t1` are used to encode into E' via the above encoding, the resulting points are added together, and that result is multiplied by the cofactor.

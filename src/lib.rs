@@ -9,9 +9,11 @@
 #![cfg_attr(feature = "clippy", allow(unreadable_literal))]
 #![cfg_attr(feature = "clippy", allow(many_single_char_names))]
 #![cfg_attr(feature = "clippy", allow(new_without_default_derive))]
+#![cfg_attr(feature = "clippy", allow(string_lit_as_bytes))]
 // Force public structures to implement Debug
 #![deny(missing_debug_implementations)]
 
+extern crate blake2_rfc;
 extern crate byteorder;
 extern crate rand;
 
@@ -177,6 +179,9 @@ pub trait CurveProjective:
     /// Recommends a wNAF window size given the number of scalars you intend to multiply
     /// a base by. Always returns a number between 2 and 22, inclusive.
     fn recommended_wnaf_for_num_scalars(num_scalars: usize) -> usize;
+
+    /// Given a message, hash into a random element of the prime-order subgroup.
+    fn hash(&[u8]) -> Self;
 }
 
 /// Affine representation of an elliptic curve point guaranteed to be

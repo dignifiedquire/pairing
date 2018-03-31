@@ -10,6 +10,15 @@ macro_rules! curve_impl {
         $compressed:ident,
         $pairing:ident
     ) => {
+
+        fn y2_from_x(x: $basefield) -> $basefield {
+            let mut y2 = x.clone();
+            y2.square();
+            y2.mul_assign(&x);
+            y2.add_assign(&$affine::get_coeff_b());
+            y2
+        }
+
         #[derive(Copy, Clone, PartialEq, Eq, Debug)]
         pub struct $affine {
             pub(crate) x: $basefield,
@@ -101,10 +110,7 @@ macro_rules! curve_impl {
             /// largest y-coordinate be selected.
             fn get_point_from_x(x: $basefield, greatest: bool) -> Option<$affine> {
                 // Compute x^3 + b
-                let mut x3b = x;
-                x3b.square();
-                x3b.mul_assign(&x);
-                x3b.add_assign(&$affine::get_coeff_b());
+                let x3b = y2_from_x(x);
 
                 x3b.sqrt().map(|y| {
                     let mut negy = y;
@@ -130,17 +136,103 @@ macro_rules! curve_impl {
                     let mut y2 = self.y;
                     y2.square();
 
-                    let mut x3b = self.x;
-                    x3b.square();
-                    x3b.mul_assign(&self.x);
-                    x3b.add_assign(&Self::get_coeff_b());
-
-                    y2 == x3b
+                    y2 == y2_from_x(self.x)
                 }
             }
 
             fn is_in_correct_subgroup_assuming_on_curve(&self) -> bool {
                 self.mul($scalarfield::char()).is_zero()
+            }
+
+            /// Implements the Shallue–van de Woestijne encoding described in
+            /// Section 3, "Indifferentiable Hashing to Barreto–Naehrig Curves"
+            /// from Foque-Tibouchi: <https://www.di.ens.fr/~fouque/pub/latincrypt12.pdf>.
+            ///
+            /// The encoding is adapted for BLS12-381.
+            ///
+            /// This encoding produces a point in E/E'. It does not reach every
+            /// point. The resulting point may not be in the prime order subgroup,
+            /// but it will be on the curve. It could be the point at infinity.
+            ///
+            /// ## Description
+            ///
+            /// Lemma 3 gives us three points:
+            ///
+            /// x_1 = (-1 + sqrt(-3))/2 - (sqrt(-3) * t^2)/(1 + b + t^2)
+            /// x_2 = (-1 - sqrt(-3))/2 + (sqrt(-3) * t^2)/(1 + b + t^2)
+            /// x_3 = 1 - (1 + b + t^2)^2/(3 * t^2)
+            ///
+            /// Given t != 0 and t != 1 + b + t^2 != 0, at least one of
+            /// these three points (x1, x2, x3) is valid on the curve.
+            ///
+            /// In the paper, 1 + b + t^2 != 0 has no solutions, but for
+            /// E(Fq) in our construction, it does have two solutions.
+            /// We follow the convention of the paper by mapping these
+            /// to some arbitrary points; in our case, the positive/negative
+            /// fixed generator (with the parity of the y-coordinate
+            /// corresponding to the t value).
+            ///
+            /// Unlike the paper, which maps t = 0 to an arbitrary point,
+            /// we map it to the point at infinity. This arrangement allows
+            /// us to preserve sw_encode(t) = sw_encode(-t) for all t.
+            ///
+            /// We choose the smallest i such that x_i is on the curve.
+            /// We choose the corresponding y-coordinate with the same
+            /// parity, defined as the point being lexicographically larger
+            /// than its negative.
+            fn sw_encode(t: $basefield) -> Self {
+                // Handle the case t == 0
+                if t.is_zero() {
+                    return Self::zero()
+                }
+
+                // We choose the corresponding y-coordinate with the same parity as t.
+                let parity = t.parity();
+
+                // w = (t^2 + b + 1)^(-1) * sqrt(-3) * t
+                let mut w = t;
+                w.square();
+                w.add_assign(&$affine::get_coeff_b());
+                w.add_assign(&$basefield::one());
+
+                // Handle the case t^2 + b + 1 == 0
+                if w.is_zero()  {
+                    let mut ret = Self::one();
+                    if parity {
+                        ret.negate()
+                    }
+                    return ret
+                }
+
+                w = w.inverse().unwrap();
+                w.mul_assign(&$basefield::get_swenc_sqrt_neg_three());
+                w.mul_assign(&t);
+
+                // x1 = - wt  + (sqrt(-3) - 1) / 2
+                let mut x1 = w;
+                x1.mul_assign(&t);
+                x1.negate();
+                x1.add_assign(&$basefield::get_swenc_sqrt_neg_three_minus_one_div_two());
+                if let Some(p) = Self::get_point_from_x(x1, parity) {
+                    return p
+                }
+
+                // x2 = -1 - x1
+                let mut x2 = x1;
+                x2.negate();
+                x2.sub_assign(&$basefield::one());
+                if let Some(p) = Self::get_point_from_x(x2, parity) {
+                    return p
+                }
+
+                // x3 = 1/w^2 + 1
+                let mut x3 = w;
+                x3.square();
+                x3 = x3.inverse().unwrap();
+                x3.add_assign(&$basefield::one());
+                Self::get_point_from_x(x3, parity).expect(
+                    "this point must be valid if the other two are not"
+                )
             }
         }
 
@@ -193,7 +285,6 @@ macro_rules! curve_impl {
             fn into_projective(&self) -> $projective {
                 (*self).into()
             }
-
         }
 
         impl Rand for $projective {
@@ -563,6 +654,33 @@ macro_rules! curve_impl {
             fn recommended_wnaf_for_num_scalars(num_scalars: usize) -> usize {
                 Self::empirical_recommended_wnaf_for_num_scalars(num_scalars)
             }
+
+            /// Implements "Indifferentiable Hashing to Barreto–Naehrig Curves" from Foque-Tibouchi.
+            /// <https://www.di.ens.fr/~fouque/pub/latincrypt12.pdf>
+            fn hash(msg: &[u8]) -> Self {
+                // The construction of Foque et al. requires us to construct two
+                // "random oracles" in the field, encode their image with `sw_encode`,
+                // and finally add them.
+                // We construct them appending to the message the string
+                // $name_$oracle
+                // For instance, the first oracle in group G1 appends: "G1_0".
+                let mut hasher_0 = Blake2b::new(64);
+                hasher_0.update(msg);
+                hasher_0.update($name.as_bytes());
+                let mut hasher_1 = hasher_0.clone();
+
+                hasher_0.update(b"_0");
+                let t0 = Self::Base::hash(hasher_0);
+                let t0 = Self::Affine::sw_encode(t0);
+
+                hasher_1.update(b"_1");
+                let t1 = Self::Base::hash(hasher_1);
+                let t1 = Self::Affine::sw_encode(t1);
+
+                let mut res = t0.into_projective();
+                res.add_assign_mixed(&t1);
+                res.into_affine().scale_by_cofactor()
+            }
         }
 
         // The affine point X, Y is represented in the jacobian
@@ -617,10 +735,44 @@ macro_rules! curve_impl {
                 }
             }
         }
+
+        #[cfg(test)]
+        use rand::{SeedableRng, XorShiftRng};
+
+        #[test]
+        fn test_hash() {
+            let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+            for _ in 0..100 {
+                let seed : [u8; 32] = rng.gen();
+                let p = $projective::hash(&seed).into_affine();
+                assert!(!p.is_zero());
+                assert!(p.is_on_curve());
+                assert!(p.is_in_correct_subgroup_assuming_on_curve());
+            }
+        }
+
+        #[test]
+        fn test_sw_encode() {
+            let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+            for _ in 0..100 {
+                let mut t = $basefield::rand(&mut rng);
+                let p = $affine::sw_encode(t);
+                assert!(p.is_on_curve());
+                assert!(!p.is_zero());
+
+                t.negate();
+                let mut minus_p = $affine::sw_encode(t).into_projective();
+                minus_p.add_assign_mixed(&p);
+                assert!(minus_p.is_zero());
+            }
+        }
     }
 }
 
 pub mod g1 {
+    use blake2_rfc::blake2b::Blake2b;
     use rand::{Rand, Rng};
     use std::fmt;
     use super::g2::G2Affine;
@@ -1260,12 +1412,63 @@ pub mod g1 {
     }
 
     #[test]
+    fn test_g1_sw_encode_degenerate() {
+        // test the degenerate case t = 0
+        let p = G1Affine::sw_encode(Fq::zero());
+        assert!(p.is_on_curve());
+        assert!(p.is_zero());
+
+        // test the degenerate case t^2 = - b - 1
+        let mut t = Fq::one();
+        t.add_assign(&G1Affine::get_coeff_b());
+        t.negate();
+        let mut t = t.sqrt().unwrap();
+        t.negate(); // If sqrt impl changes, this test will be affected
+        let p = G1Affine::sw_encode(t);
+        assert!(p.is_on_curve());
+        assert!(!p.is_zero());
+        assert_eq!(p.y.parity(), t.parity());
+        assert_eq!(p, G1Affine::one());
+        t.negate();
+        let p = G1Affine::sw_encode(t);
+        assert!(p.is_on_curve());
+        assert!(!p.is_zero());
+        assert_eq!(p.y.parity(), t.parity());
+        {
+            let mut negone = G1Affine::one();
+            negone.negate();
+            assert_eq!(p, negone);
+        }
+
+        // test that the encoding function is odd for the above t
+        t.negate();
+        let mut minus_p = G1Affine::sw_encode(t).into_projective();
+        minus_p.add_assign_mixed(&p);
+        assert!(minus_p.is_zero());
+    }
+
+    #[test]
+    fn g1_hash_test_vectors() {
+        // Obtained via python/sage
+
+        let p = G1::hash(&[]);
+        let q = G1 {
+            x: Fq::from_str("315124130825307604287835216317628428134609737854237653839182597515996444073032649481416725367158979153513345579672").unwrap(),
+            y: Fq::from_str("3093537746211397858160667262592024570071165158580434464756577567510401504168962073691924150397172185836012224315174").unwrap(),
+            z: Fq::one()
+        };
+
+        assert_eq!(p, q);
+    }
+
+    #[test]
     fn g1_curve_tests() {
         ::tests::curve::curve_tests::<G1>();
     }
 }
 
 pub mod g2 {
+    use blake2_rfc::blake2b::Blake2b;
     use rand::{Rand, Rng};
     use std::fmt;
     use super::super::{Bls12, Fq, Fq12, Fq2, FqRepr, Fr, FrRepr};
@@ -2010,6 +2213,39 @@ pub mod g2 {
                 infinity: false,
             }
         );
+    }
+
+    #[test]
+    fn test_g2_sw_encode_degenerate() {
+        // test the degenerate cases t = 0 and t^2 = - b - 1
+        let p = G2Affine::sw_encode(Fq2::zero());
+        assert!(p.is_on_curve());
+        assert!(p.is_zero());
+
+        let mut t = Fq2::one();
+        t.add_assign(&G2Affine::get_coeff_b());
+        t.negate();
+        assert_eq!(t.sqrt(), None);
+    }
+
+    #[test]
+    fn g2_hash_test_vectors() {
+        // Obtained via python/sage
+
+        let p = G2::hash(&[]);
+        let q = G2 {
+            x: Fq2 {
+                c0: Fq::from_str("1703269368484048424021410903959703695180015303406562561298910892586704964724393392000690938204229678426081532099421").unwrap(),
+                c1: Fq::from_str("1899273078921065702469032215023284089292737398509481436818508674759333584516218669155175722702009534138251936259418").unwrap(),
+            },
+            y: Fq2 {
+                c0: Fq::from_str("1983733072556618192444995460520049530986901623449598282145749270559646083332830971089171683246431283765594628842386").unwrap(),
+                c1: Fq::from_str("915456324395362816875268588526293724551529076411493014293832389675785871078275824878933205442411635336958461433442").unwrap(),
+            },
+            z: Fq2::one()
+        };
+
+        assert_eq!(p, q);
     }
 
     #[test]
