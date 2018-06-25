@@ -974,8 +974,9 @@ impl Field for Fq {
             (self.0).0[i] = res[5 - i];
         }
 
+        println!("before reduce: {:?}", self);
         self.reduce();
-
+        println!("after reduce: {:?}", self);
         // let mut carry = 0;
 
         // let r1 = ::mac_with_carry(0, (self.0).0[0], (self.0).0[1], &mut carry);
