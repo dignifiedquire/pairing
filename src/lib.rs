@@ -15,6 +15,8 @@
 #![feature(asm)]
 
 extern crate byteorder;
+#[cfg(test)]
+extern crate num_bigint;
 extern crate rand;
 
 #[cfg(test)]

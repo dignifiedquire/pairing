@@ -1,5 +1,6 @@
 use mac_with_carry;
 use std::cmp;
+// warning, lots of wrapping ahead
 
 // fq = [u64; 6] = 384bits;
 // this means we need at least 384 * 2 = 768bits range.
@@ -17,10 +18,13 @@ const FP_SIZE: usize = (FP_MAX_SIZE / DIGIT_BIT);
 type FpDigit = u64;
 const SIZEOF_FP_DIGIT: usize = 8;
 type FpWord = u32;
+const FP_WORD_SIZE: usize = 32;
+
 // else
 //   type fp_digit = u16;
 //   const SIZEOF_FP_DIGIT = 4
 //   type fp_word = u64;
+//  const FP_WORD_SIZE = 64;
 // end
 
 struct FpInt {
@@ -31,83 +35,85 @@ struct FpInt {
 
 ///  a *= a
 /// This work is based on https://github.com/libtom/tomsfastmath/blob/master/src/sqr/fp_sqr.c
+// a is assumed to be in Little Endian order.
 pub fn sqr(a: &mut [FpDigit; FP_SIZE]) {
     // for now only the generic version is available
     // TODO: investigate which unrolled versions make sense
-    let mut fp = FpInt {
-        dp: *a,
-        used: 0,
-        sign: 0,
-    };
-    sqr_comba(&mut fp);
+    sqr_comba(a);
 }
 
 /// Generic comba squarer.
-fn sqr_comba(a: &mut FpInt) {
+/// Calculates a <- a^2
+fn sqr_comba(a: &mut [FpDigit; FP_SIZE]) {
     let mut c0: FpDigit = 0;
     let mut c1: FpDigit = 0;
     let mut c2: FpDigit = 0;
-    let mut dst = FpInt {
-        dp: [0; FP_SIZE],
-        used: 0,
-        sign: 0,
-    };
-    let mut tt: FpWord = 0;
+
+    // todo: correct used number
+    let used = a.iter().position(|&x| x == 0).unwrap_or_else(|| 6);
+
+    println!("sqr_comba {:?}^2", a);
 
     // output size
-    // TODO: use used field
-    let pa = FP_SIZE - 1;
+    // TODO: absolute limit
+    let pa = 2 * used;
+
+    let mut dst = vec![0; pa];
 
     comba_start();
     clear_carry(&mut c0, &mut c1, &mut c2);
 
     for ix in 0..pa {
+        println!("outer: {}/{}", ix, pa);
         // get offsets into the two bignums
         // TODO: used field
-        let ty = cmp::min(FP_SIZE - 1, ix);
+        let ty = cmp::min(used.wrapping_sub(1), ix);
         let tx = ix - ty;
 
         // setup temp aliases;
         let mut tmpx = tx;
         let mut tmpy = ty;
 
-        // loop number
-        // TODO: used field
-        let mut iy = cmp::min(FP_SIZE - tx, ty + 1);
+        // this is the number of times the loop will iterrate,
+        // while (tx++ < a->used && ty-- >= 0) { ... }
+        let mut iy = cmp::min(used.wrapping_sub(tx), ty + 1);
 
         // now for squaring tx can never equal ty
         // we halve the distance since they approach
         // at a rate of 2x and we have to round because
         // odd cases need to be executed
-        iy = cmp::min(iy, (ty - tx + 1) >> 1);
+        iy = cmp::min(iy, (ty.wrapping_sub(tx).wrapping_add(1)) >> 1);
 
         // forward carries
         carry_forward(&mut c0, &mut c1, &mut c2);
 
+        println!("iy {} ix: {} a {:?} ({}, {})", iy, ix, a, tmpx, tmpy);
         // execute loop
-
         for _iz in 0..iy {
+            println!("tmpx, tmpy {} {}", tmpx, tmpy);
+            sqradd2(&mut c0, &mut c1, &mut c2, a[tmpx], a[tmpy]);
             tmpx += 1;
             tmpy -= 1;
-            sqradd2(&mut c0, &mut c1, &mut c2, a.dp[tmpx], a.dp[tmpy]);
         }
 
         // even columns have the square term in them
         if (ix & 1) == 0 {
-            sqradd(&mut c0, &mut c1, &mut c2, a.dp[ix >> 1], a.dp[ix >> 1]);
+            sqradd(&mut c0, &mut c1, &mut c2, a[ix >> 1], a[ix >> 1]);
         }
 
         // store it
-        println!("c1: {}", c1);
-        comba_store(&mut c0, &mut dst.dp[ix]);
-        println!("dst[ix]: {}", dst.dp[ix]);
+        println!("c0: {}", c0);
+        comba_store(&mut c0, &mut dst[ix]);
+        println!("dst[ix]: {}, {}", dst[ix], ix);
     }
-
+    println!("fin {} {} {} ({:?}) ({:?})", c0, c1, c2, a, dst);
     comba_fini();
 
-    // setup dest
-    // TODO: improve perf
-    *a = dst;
+    // write back to a
+    let len = cmp::min(pa, a.len());
+    if len > 0 {
+        a[0..len].copy_from_slice(&dst[0..len]);
+    }
 }
 
 // -- portable implementation
@@ -145,27 +151,46 @@ fn comba_fini() {}
 /// Multiplies point i and j, updates carry `c1` and digit `c2`
 #[inline(always)]
 fn sqradd(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: FpDigit) {
-    let mut t = c0.wrapping_add(i.wrapping_mul(j));
-    *c0 = t;
-    t = c1.wrapping_add(t.wrapping_shr(8));
-    *c1 = t;
-    *c2 = c2.wrapping_add(t.wrapping_shr(8));
+    println!("sqradd {} {} {} {} {}", c0, c1, c2, i, j);
+    let mut t = (*c0 as FpWord).wrapping_add((i as FpWord).wrapping_mul(j as FpWord));
+    *c0 = t as FpDigit;
+
+    t = (*c1 as FpWord).wrapping_add(shr(t, DIGIT_BIT as FpWord));
+    *c1 = t as FpDigit;
+    *c2 = c2.wrapping_add(shr(t, DIGIT_BIT as FpWord) as FpDigit);
+
+    println!("sqradd-done {} {} {} {} {}", c0, c1, c2, i, j);
 }
 
 // For squaring some of the terms are doubled
 #[inline(always)]
 fn sqradd2(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: FpDigit) {
-    let t = i.wrapping_mul(j);
-    let mut tt = c0.wrapping_add(t);
-    *c0 = tt;
-    tt = c1.wrapping_add(tt.wrapping_shr(8));
-    *c1 = tt;
-    *c2 = c2.wrapping_add(tt.wrapping_shr(8));
-    tt = c0.wrapping_add(t);
-    *c0 = tt;
-    tt = c1.wrapping_add(tt.wrapping_shr(8));
-    *c1 = tt;
-    *c2 = c2.wrapping_add(tt.wrapping_shr(8));
+    println!("sqradd2 {} {} {} {} {}", c0, c1, c2, i, j);
+    let t: FpWord = (i as FpWord).wrapping_mul(j as FpWord);
+    let mut tt: FpWord = (*c0 as FpWord).wrapping_add(t);
+    *c0 = tt as FpDigit;
+
+    tt = (*c1 as FpWord).wrapping_add(shr(tt, DIGIT_BIT as u32).into());
+    *c1 = tt as FpDigit;
+    *c2 = c2.wrapping_add(shr(tt, DIGIT_BIT as FpWord).into());
+
+    tt = (*c0 as FpWord).wrapping_add(t);
+    *c0 = tt as FpDigit;
+
+    tt = (*c1 as FpWord).wrapping_add(shr(tt, DIGIT_BIT as FpWord));
+    *c1 = tt as FpDigit;
+    *c2 = c2.wrapping_add(shr(tt, DIGIT_BIT as FpWord).into());
+}
+
+/// Right shift, with saturation, i.e. filling with `0` instead of wrapping.
+/// This emulates C's behaviour.
+#[inline(always)]
+fn shr(lhs: FpWord, rhs: FpWord) -> FpWord {
+    if rhs as usize >= FP_WORD_SIZE {
+        0
+    } else {
+        lhs >> rhs
+    }
 }
 
 #[cfg(test)]
@@ -182,8 +207,8 @@ fn test_sqradd() {
     sqradd(&mut c0, &mut c1, &mut c2, i, j);
 
     assert_eq!(c0, 50);
-    assert_eq!(c1, 50);
-    assert_eq!(c2, 50);
+    assert_eq!(c1, 0);
+    assert_eq!(c2, 0);
 
     sqradd(&mut c0, &mut c1, &mut c2, i, j);
 
@@ -196,33 +221,6 @@ fn test_sqradd() {
     assert_eq!(c0, 150);
     assert_eq!(c1, 44);
     assert_eq!(c2, 244);
-}
-
-#[test]
-fn test_sqradd2() {
-    let mut c0 = 0;
-    let mut c1 = 0;
-    let mut c2 = 0;
-    let i = 5;
-    let j = 10;
-
-    sqradd2(&mut c0, &mut c1, &mut c2, i, j);
-
-    assert_eq!(c0, 100);
-    assert_eq!(c1, 150);
-    assert_eq!(c2, 200);
-
-    sqradd2(&mut c0, &mut c1, &mut c2, i, j);
-
-    assert_eq!(c0, 200);
-    assert_eq!(c1, 244);
-    assert_eq!(c2, 232);
-
-    sqradd2(&mut c0, &mut c1, &mut c2, i, j);
-
-    assert_eq!(c0, 44);
-    assert_eq!(c1, 26);
-    assert_eq!(c2, 240);
 }
 
 /// Calculate `a + b * c`.
@@ -317,17 +315,38 @@ fn test_mul() {
     }
 }
 
+#[cfg(test)]
+use num_bigint::BigUint;
+
+fn split_u64(i: u64) -> (u32, u32) {
+    ((i & 0xFFFFFFFF) as u32, (i >> 32) as u32)
+}
+
 #[test]
-fn test_sqr() {
-    for i in 0..256 {
-        let mut a = [0, 0, 0, 0, 0, i as u64];
-        sqr(&mut a);
-        assert_eq!(
-            a.to_vec(),
-            vec![0, 0, 0, 0, 0, (i * i) as u64],
-            "{}^2 = {}",
-            i,
-            i * i
+fn test_sqr_small() {
+    for i in 0u8..255 {
+        let a_u64 = [i as u64, 0, 0, 0, 0, 0];
+        let mut a_u8 = vec![0u8; 6 * 8];
+        a_u8[0] = i as u8;
+
+        let a_big = BigUint::from_bytes_le(&a_u8);
+        let mut a_res_u64 = a_u64.clone();
+        sqr(&mut a_res_u64);
+
+        let a_res_big = a_big.clone() * a_big.clone();
+
+        println!(
+            "{:?} {:?} {:?} {:?}",
+            a_big.to_bytes_le(),
+            a_res_big.to_bytes_le(),
+            a_u64,
+            a_res_u64
         );
+        let a_res_slice: Vec<u32> = a_res_u64
+            .iter()
+            .flat_map(|v| vec![split_u64(*v).0, split_u64(*v).1])
+            .collect();
+        let a_res_u64_big = BigUint::from_slice(&a_res_slice);
+        assert_eq!(a_res_big, a_res_u64_big);
     }
 }
