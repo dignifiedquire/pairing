@@ -36,15 +36,17 @@ struct FpInt {
 ///  a *= a
 /// This work is based on https://github.com/libtom/tomsfastmath/blob/master/src/sqr/fp_sqr.c
 // a is assumed to be in Little Endian order.
-pub fn sqr(a: &mut [FpDigit; FP_SIZE]) {
+#[inline]
+pub fn sqr(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
     // for now only the generic version is available
     // TODO: investigate which unrolled versions make sense
-    sqr_comba(a);
+    sqr_comba(a)
 }
 
 /// Generic comba squarer.
 /// Calculates a <- a^2
-fn sqr_comba(a: &mut [FpDigit; FP_SIZE]) {
+#[inline(always)]
+fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
     let mut c0: FpDigit = 0;
     let mut c1: FpDigit = 0;
     let mut c2: FpDigit = 0;
@@ -52,19 +54,19 @@ fn sqr_comba(a: &mut [FpDigit; FP_SIZE]) {
     // todo: correct used number
     let used = a.iter().position(|&x| x == 0).unwrap_or_else(|| 6);
 
-    println!("sqr_comba {:?}^2", a);
+    // println!("sqr_comba {:?}^2", a);
 
     // output size
     // TODO: absolute limit
     let pa = 2 * used;
 
-    let mut dst = vec![0; pa];
+    let mut dst = [0u64; 12];
 
     comba_start();
     clear_carry(&mut c0, &mut c1, &mut c2);
 
     for ix in 0..pa {
-        println!("outer: {}/{}", ix, pa);
+        // println!("outer: {}/{}", ix, pa);
         // get offsets into the two bignums
         // TODO: used field
         let ty = cmp::min(used.wrapping_sub(1), ix);
@@ -87,10 +89,10 @@ fn sqr_comba(a: &mut [FpDigit; FP_SIZE]) {
         // forward carries
         carry_forward(&mut c0, &mut c1, &mut c2);
 
-        println!("iy {} ix: {} a {:?} ({}, {})", iy, ix, a, tmpx, tmpy);
+        // println!("iy {} ix: {} a {:?} ({}, {})", iy, ix, a, tmpx, tmpy);
         // execute loop
         for _iz in 0..iy {
-            println!("tmpx, tmpy {} {}", tmpx, tmpy);
+            // println!("tmpx, tmpy {} {}", tmpx, tmpy);
             sqradd2(&mut c0, &mut c1, &mut c2, a[tmpx], a[tmpy]);
             tmpx += 1;
             tmpy -= 1;
@@ -102,18 +104,14 @@ fn sqr_comba(a: &mut [FpDigit; FP_SIZE]) {
         }
 
         // store it
-        println!("c0: {}", c0);
+        // println!("c0: {}", c0);
         comba_store(&mut c0, &mut dst[ix]);
-        println!("dst[ix]: {}, {}", dst[ix], ix);
+        // println!("dst[ix]: {}, {}", dst[ix], ix);
     }
-    println!("fin {} {} {} ({:?}) ({:?})", c0, c1, c2, a, dst);
+    // println!("fin {} {} {} ({:?}) ({:?})", c0, c1, c2, a, dst);
     comba_fini();
 
-    // write back to a
-    let len = cmp::min(pa, a.len());
-    if len > 0 {
-        a[0..len].copy_from_slice(&dst[0..len]);
-    }
+    dst
 }
 
 // -- portable implementation
@@ -151,7 +149,7 @@ fn comba_fini() {}
 /// Multiplies point i and j, updates carry `c1` and digit `c2`
 #[inline(always)]
 fn sqradd(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: FpDigit) {
-    println!("sqradd {} {} {} {} {}", c0, c1, c2, i, j);
+    // println!("sqradd {} {} {} {} {}", c0, c1, c2, i, j);
     let mut t = (*c0 as FpWord).wrapping_add((i as FpWord).wrapping_mul(j as FpWord));
     *c0 = t as FpDigit;
 
@@ -159,13 +157,13 @@ fn sqradd(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: F
     *c1 = t as FpDigit;
     *c2 = c2.wrapping_add((t >> DIGIT_BIT as FpWord) as FpDigit);
 
-    println!("sqradd-done {} {} {} {} {}", c0, c1, c2, i, j);
+    // println!("sqradd-done {} {} {} {} {}", c0, c1, c2, i, j);
 }
 
 // For squaring some of the terms are doubled
 #[inline(always)]
 fn sqradd2(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: FpDigit) {
-    println!("sqradd2 {} {} {} {} {}", c0, c1, c2, i, j);
+    // println!("sqradd2 {} {} {} {} {}", c0, c1, c2, i, j);
     let t: FpWord = (i as FpWord).wrapping_mul(j as FpWord);
     let mut tt: FpWord = (*c0 as FpWord).wrapping_add(t);
     *c0 = tt as FpDigit;
@@ -321,6 +319,11 @@ fn test_sqr_range() {
         u64::max_value() - 1,
         u64::max_value(),
     ];
+
+    // max that can fit into 6 * 64 bits
+    let max = BigUint::from_slice(&vec![u32::max_value(); 12]);
+    let two: BigUint = 2u64.into();
+
     for i in range.iter() {
         for j in range.iter() {
             for k in range.iter() {
@@ -335,8 +338,7 @@ fn test_sqr_range() {
                         .collect();
                     let a_big = BigUint::from_slice(&a_u64_slice);
 
-                    let mut a_res_u64 = a_u64.clone();
-                    sqr(&mut a_res_u64);
+                    let a_res_u64 = sqr(&a_u64);
 
                     let a_res_big = a_big.clone() * a_big.clone();
 
