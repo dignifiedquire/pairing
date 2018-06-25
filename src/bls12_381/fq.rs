@@ -1,4 +1,6 @@
+use super::asm;
 use super::fq2::Fq2;
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::cmp::Ordering;
 use {Field, PrimeField, PrimeFieldDecodingError, PrimeFieldRepr, SqrtField};
 
@@ -962,6 +964,7 @@ impl Field for Fq {
     #[inline]
     fn square(&mut self) {
         let mut carry = 0;
+
         let r1 = ::mac_with_carry(0, (self.0).0[0], (self.0).0[1], &mut carry);
         let r2 = ::mac_with_carry(0, (self.0).0[0], (self.0).0[2], &mut carry);
         let r3 = ::mac_with_carry(0, (self.0).0[0], (self.0).0[3], &mut carry);
@@ -1031,6 +1034,39 @@ impl Fq {
         if !self.is_valid() {
             self.0.sub_noborrow(&MODULUS);
         }
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> [u8; 48] {
+        let mut buffer = [0u8; 48];
+        {
+            let mut p = &mut buffer[..];
+            for i in 0..6 {
+                p.write_u64::<BigEndian>((self.0).0[i]).unwrap();
+            }
+        }
+        buffer
+        // unsafe {
+        //     ::std::slice::from_raw_parts(
+        //         (self.0).0.as_ptr() as *const u8,
+        //         (self.0).0.len() * ::std::mem::size_of::<u64>(),
+        //     )
+        // }
+    }
+
+    #[inline]
+    pub fn from_bytes(bytes: &[u8]) -> Fq {
+        assert_eq!(bytes.len(), 48);
+        let mut buf = &bytes[..];
+        let repr: [u64; 6] = [
+            buf.read_u64::<BigEndian>().unwrap(),
+            buf.read_u64::<BigEndian>().unwrap(),
+            buf.read_u64::<BigEndian>().unwrap(),
+            buf.read_u64::<BigEndian>().unwrap(),
+            buf.read_u64::<BigEndian>().unwrap(),
+            buf.read_u64::<BigEndian>().unwrap(),
+        ];
+        Fq(FqRepr(repr))
     }
 
     #[inline(always)]
@@ -1119,6 +1155,13 @@ impl Fq {
         (self.0).0[4] = r10;
         (self.0).0[5] = r11;
         self.reduce();
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        for e in (self.0).0.iter_mut() {
+            *e = 0;
+        }
     }
 }
 
@@ -2304,14 +2347,16 @@ fn test_fq_is_valid() {
             0x17c8be1800b9f059
         ])).is_valid()
     );
-    assert!(!Fq(FqRepr([
-        0xffffffffffffffff,
-        0xffffffffffffffff,
-        0xffffffffffffffff,
-        0xffffffffffffffff,
-        0xffffffffffffffff,
-        0xffffffffffffffff
-    ])).is_valid());
+    assert!(
+        !Fq(FqRepr([
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff
+        ])).is_valid()
+    );
 
     let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
 
@@ -2638,6 +2683,7 @@ fn test_fq_squaring() {
     ]));
     assert!(a.is_valid());
     a.square();
+    assert!(a.is_valid());
     assert_eq!(
         a,
         Fq::from_repr(FqRepr([
@@ -2956,4 +3002,18 @@ fn test_fq_legendre() {
         0x1d61ac6bfd5c88b,
     ]);
     assert_eq!(QuadraticResidue, Fq::from_repr(e).unwrap().legendre());
+}
+
+#[test]
+fn test_fq_to_bytes() {
+    let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+    for _ in 0..1000 {
+        let a = Fq::rand(&mut rng);
+
+        let bytes = a.as_bytes();
+        let back = Fq::from_bytes(&bytes);
+
+        assert_eq!(a, back);
+    }
 }

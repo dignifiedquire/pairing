@@ -21,3 +21,9 @@ unstable-features = ["expose-arith"]
 expose-arith = []
 u128-support = []
 default = []
+
+[profile.release]
+debug = true
+
+[profile.bench]
+debug = true

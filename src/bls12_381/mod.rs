@@ -1,3 +1,4 @@
+pub mod asm;
 mod ec;
 mod fq;
 mod fq12;

@@ -1,3 +1,6 @@
+#![feature(test)]
+extern crate test;
+
 use rand::{Rand, SeedableRng, XorShiftRng};
 
 use pairing::bls12_381::*;
@@ -167,17 +170,21 @@ fn bench_fq_mul_assign(b: &mut ::test::Bencher) {
 
 #[bench]
 fn bench_fq_square(b: &mut ::test::Bencher) {
-    const SAMPLES: usize = 1000;
+    let samples = test::black_box(10000);
 
     let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
 
-    let v: Vec<Fq> = (0..SAMPLES).map(|_| Fq::rand(&mut rng)).collect();
+    let v: Vec<Fq> = (0..samples).map(|_| Fq::rand(&mut rng)).collect();
 
     let mut count = 0;
     b.iter(|| {
         let mut tmp = v[count];
         tmp.square();
-        count = (count + 1) % SAMPLES;
+        tmp.square();
+        tmp.square();
+        tmp.square();
+        tmp.square();
+        count = (count + 1) % samples;
         tmp
     });
 }
