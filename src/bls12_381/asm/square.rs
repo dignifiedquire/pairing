@@ -17,8 +17,8 @@ const FP_SIZE: usize = (FP_MAX_SIZE / DIGIT_BIT);
 // if FP_64BIT
 type FpDigit = u64;
 const SIZEOF_FP_DIGIT: usize = 8;
-type FpWord = u32;
-const FP_WORD_SIZE: usize = 32;
+type FpWord = u128;
+const FP_WORD_SIZE: usize = 128;
 
 // else
 //   type fp_digit = u16;
@@ -170,16 +170,16 @@ fn sqradd2(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: 
     let mut tt: FpWord = (*c0 as FpWord).wrapping_add(t);
     *c0 = tt as FpDigit;
 
-    tt = (*c1 as FpWord).wrapping_add(shr(tt, DIGIT_BIT as u32).into());
+    tt = (*c1 as FpWord).wrapping_add(shr(tt, DIGIT_BIT as FpWord));
     *c1 = tt as FpDigit;
-    *c2 = c2.wrapping_add(shr(tt, DIGIT_BIT as FpWord).into());
+    *c2 = c2.wrapping_add(shr(tt, DIGIT_BIT as FpWord) as FpDigit);
 
     tt = (*c0 as FpWord).wrapping_add(t);
     *c0 = tt as FpDigit;
 
     tt = (*c1 as FpWord).wrapping_add(shr(tt, DIGIT_BIT as FpWord));
     *c1 = tt as FpDigit;
-    *c2 = c2.wrapping_add(shr(tt, DIGIT_BIT as FpWord).into());
+    *c2 = c2.wrapping_add(shr(tt, DIGIT_BIT as FpWord) as FpDigit);
 }
 
 /// Right shift, with saturation, i.e. filling with `0` instead of wrapping.
@@ -324,29 +324,42 @@ fn split_u64(i: u64) -> (u32, u32) {
 
 #[test]
 fn test_sqr_small() {
-    for i in 0u8..255 {
-        let a_u64 = [i as u64, 0, 0, 0, 0, 0];
-        let mut a_u8 = vec![0u8; 6 * 8];
-        a_u8[0] = i as u8;
+    let range = vec![
+        0,
+        100000,
+        u32::max_value() as u64,
+        u64::max_value() - 1,
+        u64::max_value(),
+    ];
+    for i in range.iter() {
+        for j in range.iter() {
+            println!("[{}, {}, {}, {}, {}, {}]^2", j, i, 0, 0, 0, 0);
+            let a_u64 = [*j, *i, 0, 0, 0, 0];
 
-        let a_big = BigUint::from_bytes_le(&a_u8);
-        let mut a_res_u64 = a_u64.clone();
-        sqr(&mut a_res_u64);
+            let a_u64_slice: Vec<u32> = a_u64
+                .iter()
+                .flat_map(|v| vec![split_u64(*v).0, split_u64(*v).1])
+                .collect();
+            let a_big = BigUint::from_slice(&a_u64_slice);
 
-        let a_res_big = a_big.clone() * a_big.clone();
+            let mut a_res_u64 = a_u64.clone();
+            sqr(&mut a_res_u64);
 
-        println!(
-            "{:?} {:?} {:?} {:?}",
-            a_big.to_bytes_le(),
-            a_res_big.to_bytes_le(),
-            a_u64,
-            a_res_u64
-        );
-        let a_res_slice: Vec<u32> = a_res_u64
-            .iter()
-            .flat_map(|v| vec![split_u64(*v).0, split_u64(*v).1])
-            .collect();
-        let a_res_u64_big = BigUint::from_slice(&a_res_slice);
-        assert_eq!(a_res_big, a_res_u64_big);
+            let a_res_big = a_big.clone() * a_big.clone();
+
+            println!(
+                "{:?} {:?} {:?} {:?}",
+                a_big.to_bytes_le(),
+                a_res_big.to_bytes_le(),
+                a_u64,
+                a_res_u64
+            );
+            let a_res_slice: Vec<u32> = a_res_u64
+                .iter()
+                .flat_map(|v| vec![split_u64(*v).0, split_u64(*v).1])
+                .collect();
+            let a_res_u64_big = BigUint::from_slice(&a_res_slice);
+            assert_eq!(a_res_big, a_res_u64_big);
+        }
     }
 }
