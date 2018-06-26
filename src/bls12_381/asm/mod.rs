@@ -6,6 +6,7 @@ mod square_asm;
 
 pub mod mul;
 pub mod square;
+pub mod squaremod;
 
 // fq = [u64; 6] = 384bits;
 // this means we need at least 384 * 2 = 768bits range.
