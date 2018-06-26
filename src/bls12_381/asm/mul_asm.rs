@@ -18,6 +18,12 @@ macro_rules! comba_store {
         $x = $c0;
     };
 }
+#[macro_export]
+macro_rules! comba_store2 {
+    ($c1:ident, $x:expr) => {
+        $x = $c1;
+    };
+}
 
 #[macro_export]
 macro_rules! comba_forward {

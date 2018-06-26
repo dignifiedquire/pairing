@@ -8,7 +8,8 @@ use std::cmp;
 pub fn sqr(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
     // for now only the generic version is available
     // TODO: investigate unrolled versions
-    sqr_comba(a)
+    // sqr_comba(a)
+    sqr_comba6(a)
 }
 
 /// Generic comba squarer.
@@ -39,7 +40,6 @@ fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
     clear_carry!(c0, c1, c2);
 
     for ix in 0..pa {
-        // println!("outer: {}/{}", ix, pa);
         // get offsets into the two bignums
         // TODO: used field
         let ty = cmp::min(used.wrapping_sub(1), ix);
@@ -64,15 +64,18 @@ fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
 
         // execute loop
         for _iz in 0..iy {
-            // println!("tmpx, tmpy {} {}", tmpx, tmpy);
-            sqradd2!(c0, c1, c2, a[tmpx], a[tmpy]);
+            sqradd2!(c0, c1, c2, *unsafe { a.get_unchecked(tmpx) }, *unsafe {
+                a.get_unchecked(tmpy)
+            });
             tmpx += 1;
             tmpy -= 1;
         }
 
         // even columns have the square term in them
         if (ix & 1) == 0 {
-            sqradd!(c0, c1, c2, a[ix >> 1], a[ix >> 1]);
+            sqradd!(c0, c1, c2, *unsafe { a.get_unchecked(ix >> 1) }, *unsafe {
+                a.get_unchecked(ix >> 1)
+            });
         }
 
         // store it
@@ -84,51 +87,90 @@ fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
     dst
 }
 
-/// Calculate `a + b * c`.
-#[cfg(target_arch = "x86_64")]
-#[inline(never)]
-pub fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
-    let mut res = a;
+#[inline(always)]
+fn sqr_comba6(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
+    let mut c0: FpDigit = 0;
+    let mut c1: FpDigit = 0;
+    let mut c2: FpDigit = 0;
+    let mut sc0: FpDigit = 0;
+    let mut sc1: FpDigit = 0;
+    let mut sc2: FpDigit = 0;
 
-    // println!("before: {} + {} * {} = {:?} ({})", a, b, c, res, carry);
+    let mut b: [FpDigit; 12] = [0; 12];
 
-    unsafe {
-        asm!(
-            "// movq $4, %rax ; // rax = b               \n\t\
-             mulq $5       ; // rdx:rax = rax * c     \n\t\
-             addq %rdx, $1 ; // carry += rax            \n\t\
-             adcq %rax, $0 ; // res += rdx          \n\t\
-             "
-                : "=&r"(res), "=&r"(*carry)
-                : "0"(res), "1"(*carry), "{rax}"(b), "r"(c)
-                : "%rax", "%rdx", "cc"
-                : "volatile"
-        );
-    }
-    println!("after: {} + {} * {} = {:?} ({})", a, b, c, res, carry);
+    comba_start!();
 
-    res
-}
+    // clear carries
+    clear_carry!(c0, c1, c2);
 
-// #[cfg(not(target_arch = "x86_64"))]
-pub fn mac_fallback(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
-    let mut c0 = a;
-    let mut c1 = 0u64;
-    let mut c2 = 0u64;
+    // output 0
+    sqradd!(c0, c1, c2, a[0], a[0]);
+    comba_store!(c0, b[0]);
 
-    let mut t: u64 = c0.wrapping_add(b.wrapping_mul(c));
-    println!("t: {}", t);
-    c0 = t;
-    println!("c0: {}", c0);
-    t = c1.wrapping_add(t.wrapping_shr(8));
-    println!("t: {}", t);
-    c1 = t;
-    c2 = c2.wrapping_add(t.wrapping_shr(8));
-    println!("c2: {}", c2);
+    // output 1
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[0], a[1]);
+    comba_store!(c0, b[1]);
 
-    println!("{} {} {}", c0, c1, c2);
-    *carry = c2;
-    c0
+    // output 2
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[0], a[2]);
+    sqradd!(c0, c1, c2, a[1], a[1]);
+    comba_store!(c0, b[2]);
+
+    // output 3
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[0], a[3]);
+    sqradd2!(c0, c1, c2, a[1], a[2]);
+    comba_store!(c0, b[3]);
+
+    // output 4
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[0], a[4]);
+    sqradd2!(c0, c1, c2, a[1], a[3]);
+    sqradd!(c0, c1, c2, a[2], a[2]);
+    comba_store!(c0, b[4]);
+
+    // output 5
+    carry_forward!(c0, c1, c2);
+    sqraddsc!(sc0, sc1, sc2, a[0], a[5]);
+    sqraddac!(sc0, sc1, sc2, a[1], a[4]);
+    sqraddac!(sc0, sc1, sc2, a[2], a[3]);
+    sqradddb!(sc0, sc1, sc2, c0, c1, c2);
+    comba_store!(c0, b[5]);
+
+    // output 6
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[1], a[5]);
+    sqradd2!(c0, c1, c2, a[2], a[4]);
+    sqradd!(c0, c1, c2, a[3], a[3]);
+    comba_store!(c0, b[6]);
+
+    // output 7
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[2], a[5]);
+    sqradd2!(c0, c1, c2, a[3], a[4]);
+    comba_store!(c0, b[7]);
+
+    // output 8
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[3], a[5]);
+    sqradd!(c0, c1, c2, a[4], a[4]);
+    comba_store!(c0, b[8]);
+
+    // output 9
+    carry_forward!(c0, c1, c2);
+    sqradd2!(c0, c1, c2, a[4], a[5]);
+    comba_store!(c0, b[9]);
+
+    // output 10
+    carry_forward!(c0, c1, c2);
+    sqradd!(c0, c1, c2, a[5], a[5]);
+    comba_store!(c0, b[10]);
+    comba_store2!(c1, b[11]);
+    comba_fini!();
+
+    b
 }
 
 #[cfg(test)]
