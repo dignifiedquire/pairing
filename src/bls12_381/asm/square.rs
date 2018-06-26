@@ -1,6 +1,4 @@
-use mac_with_carry;
 use std::cmp;
-// warning, lots of wrapping ahead
 
 // fq = [u64; 6] = 384bits;
 // this means we need at least 384 * 2 = 768bits range.
@@ -27,10 +25,68 @@ const FP_WORD_SIZE: usize = 128;
 //  const FP_WORD_SIZE = 64;
 // end
 
-struct FpInt {
-    dp: [FpDigit; FP_SIZE],
-    used: u16, // unused for now
-    sign: u16,
+// -- portable implementation
+
+macro_rules! comba_start {
+    () => {};
+}
+
+macro_rules! clear_carry {
+    ($c0:ident, $c1:ident, $c2:ident) => {
+        $c0 = 0;
+        $c1 = 0;
+        $c2 = 0;
+    };
+}
+
+macro_rules! comba_store {
+    ($c0:ident, $x:expr) => {
+        $x = $c0;
+    };
+}
+
+macro_rules! carry_forward {
+    ($c0:ident, $c1:ident, $c2:ident) => {
+        $c0 = $c1;
+        $c1 = $c2;
+        $c2 = 0;
+    };
+}
+
+macro_rules! comba_fini {
+    () => {};
+}
+
+/// Multiplies point i and j, updates carry `c1` and digit `c2`
+macro_rules! sqradd {
+    ($c0:ident, $c1:ident, $c2:ident, $i:expr, $j:expr) => {{
+        let mut t = ($c0 as FpWord).wrapping_add(($i as FpWord).wrapping_mul($j as FpWord));
+        $c0 = t as FpDigit;
+
+        t = ($c1 as FpWord).wrapping_add(t >> DIGIT_BIT as FpWord);
+        $c1 = t as FpDigit;
+        $c2 = $c2.wrapping_add((t >> DIGIT_BIT as FpWord) as FpDigit);
+    }};
+}
+
+// For squaring some of the terms are doubled
+macro_rules! sqradd2 {
+    ($c0:ident, $c1:ident, $c2:ident, $i:expr, $j:expr) => {{
+        let t: FpWord = ($i as FpWord).wrapping_mul($j as FpWord);
+        let mut tt: FpWord = ($c0 as FpWord).wrapping_add(t);
+        $c0 = tt as FpDigit;
+
+        tt = ($c1 as FpWord).wrapping_add(tt >> DIGIT_BIT as FpWord);
+        $c1 = tt as FpDigit;
+        $c2 = $c2.wrapping_add((tt >> DIGIT_BIT as FpWord) as FpDigit);
+
+        tt = ($c0 as FpWord).wrapping_add(t);
+        $c0 = tt as FpDigit;
+
+        tt = ($c1 as FpWord).wrapping_add(tt >> DIGIT_BIT as FpWord);
+        $c1 = tt as FpDigit;
+        $c2 = $c2.wrapping_add((tt >> DIGIT_BIT as FpWord) as FpDigit);
+    }};
 }
 
 ///  a *= a
@@ -46,6 +102,8 @@ pub fn sqr(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
 /// Generic comba squarer.
 /// Calculates a <- a^2
 #[inline(always)]
+// needed because of https://github.com/rust-lang/rust/issues/24580
+#[allow(unused_assignments)]
 fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
     let mut c0: FpDigit = 0;
     let mut c1: FpDigit = 0;
@@ -62,8 +120,8 @@ fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
 
     let mut dst = [0u64; 12];
 
-    comba_start();
-    clear_carry(&mut c0, &mut c1, &mut c2);
+    comba_start!();
+    clear_carry!(c0, c1, c2);
 
     for ix in 0..pa {
         // println!("outer: {}/{}", ix, pa);
@@ -87,127 +145,31 @@ fn sqr_comba(a: &[FpDigit; FP_SIZE]) -> [FpDigit; 12] {
         iy = cmp::min(iy, (ty.wrapping_sub(tx).wrapping_add(1)) >> 1);
 
         // forward carries
-        carry_forward(&mut c0, &mut c1, &mut c2);
+        carry_forward!(c0, c1, c2);
 
         // println!("iy {} ix: {} a {:?} ({}, {})", iy, ix, a, tmpx, tmpy);
         // execute loop
         for _iz in 0..iy {
             // println!("tmpx, tmpy {} {}", tmpx, tmpy);
-            sqradd2(&mut c0, &mut c1, &mut c2, a[tmpx], a[tmpy]);
+            sqradd2!(c0, c1, c2, a[tmpx], a[tmpy]);
             tmpx += 1;
             tmpy -= 1;
         }
 
         // even columns have the square term in them
         if (ix & 1) == 0 {
-            sqradd(&mut c0, &mut c1, &mut c2, a[ix >> 1], a[ix >> 1]);
+            sqradd!(c0, c1, c2, a[ix >> 1], a[ix >> 1]);
         }
 
         // store it
         // println!("c0: {}", c0);
-        comba_store(&mut c0, &mut dst[ix]);
+        comba_store!(c0, dst[ix]);
         // println!("dst[ix]: {}, {}", dst[ix], ix);
     }
     // println!("fin {} {} {} ({:?}) ({:?})", c0, c1, c2, a, dst);
-    comba_fini();
+    comba_fini!();
 
     dst
-}
-
-// -- portable implementation
-
-#[inline(always)]
-fn comba_start() {}
-
-#[inline(always)]
-fn clear_carry(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit) {
-    *c0 = 0;
-    *c1 = 0;
-    *c2 = 0;
-}
-
-#[inline(always)]
-fn comba_store(c0: &mut FpDigit, x: &mut FpDigit) {
-    *x = *c0;
-}
-
-#[inline(always)]
-fn comba_store2(c1: &mut FpDigit, x: &mut FpDigit) {
-    *x = *c1;
-}
-
-#[inline(always)]
-fn carry_forward(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit) {
-    *c0 = *c1;
-    *c1 = *c2;
-    *c2 = 0;
-}
-
-#[inline(always)]
-fn comba_fini() {}
-
-/// Multiplies point i and j, updates carry `c1` and digit `c2`
-#[inline(always)]
-fn sqradd(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: FpDigit) {
-    // println!("sqradd {} {} {} {} {}", c0, c1, c2, i, j);
-    let mut t = (*c0 as FpWord).wrapping_add((i as FpWord).wrapping_mul(j as FpWord));
-    *c0 = t as FpDigit;
-
-    t = (*c1 as FpWord).wrapping_add(t >> DIGIT_BIT as FpWord);
-    *c1 = t as FpDigit;
-    *c2 = c2.wrapping_add((t >> DIGIT_BIT as FpWord) as FpDigit);
-
-    // println!("sqradd-done {} {} {} {} {}", c0, c1, c2, i, j);
-}
-
-// For squaring some of the terms are doubled
-#[inline(always)]
-fn sqradd2(c0: &mut FpDigit, c1: &mut FpDigit, c2: &mut FpDigit, i: FpDigit, j: FpDigit) {
-    // println!("sqradd2 {} {} {} {} {}", c0, c1, c2, i, j);
-    let t: FpWord = (i as FpWord).wrapping_mul(j as FpWord);
-    let mut tt: FpWord = (*c0 as FpWord).wrapping_add(t);
-    *c0 = tt as FpDigit;
-
-    tt = (*c1 as FpWord).wrapping_add(tt >> DIGIT_BIT as FpWord);
-    *c1 = tt as FpDigit;
-    *c2 = c2.wrapping_add((tt >> DIGIT_BIT as FpWord) as FpDigit);
-
-    tt = (*c0 as FpWord).wrapping_add(t);
-    *c0 = tt as FpDigit;
-
-    tt = (*c1 as FpWord).wrapping_add(tt >> DIGIT_BIT as FpWord);
-    *c1 = tt as FpDigit;
-    *c2 = c2.wrapping_add((tt >> DIGIT_BIT as FpWord) as FpDigit);
-}
-
-#[cfg(test)]
-use rand::{Rand, Rng, SeedableRng, XorShiftRng};
-
-#[test]
-fn test_sqradd() {
-    let mut c0 = 0;
-    let mut c1 = 0;
-    let mut c2 = 0;
-    let i = 5;
-    let j = 10;
-
-    sqradd(&mut c0, &mut c1, &mut c2, i, j);
-
-    assert_eq!(c0, 50);
-    assert_eq!(c1, 0);
-    assert_eq!(c2, 0);
-
-    sqradd(&mut c0, &mut c1, &mut c2, i, j);
-
-    assert_eq!(c0, 100);
-    assert_eq!(c1, 150);
-    assert_eq!(c2, 200);
-
-    sqradd(&mut c0, &mut c1, &mut c2, i, j);
-
-    assert_eq!(c0, 150);
-    assert_eq!(c1, 44);
-    assert_eq!(c2, 244);
 }
 
 /// Calculate `a + b * c`.
@@ -255,51 +217,6 @@ pub fn mac_fallback(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     println!("{} {} {}", c0, c1, c2);
     *carry = c2;
     c0
-}
-
-#[test]
-fn test_mul() {
-    // no overflow
-    let a = 100;
-    let b = 100;
-    let c = 5;
-    let mut carry = 1;
-    let mut carry2 = 1;
-
-    assert_eq!(
-        mac(a, b, c, &mut carry),
-        mac_with_carry(a, b, c, &mut carry2)
-    );
-
-    assert_eq!(carry, carry2);
-
-    // with overflow
-
-    let a = 18446744073709551615;
-    let b = 10;
-    let c = 5;
-    let carry = &mut 0;
-    let carry2 = &mut 0;
-
-    assert_eq!(mac(a, b, c, carry), mac_with_carry(a, b, c, carry2));
-    assert_eq!(carry, carry2);
-
-    // range
-    let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
-
-    for _ in 0..1000 {
-        let a: u64 = rng.gen();
-        let b: u64 = rng.gen();
-        let c: u64 = rng.gen();
-        let mut carry: u64 = rng.gen();
-        let mut carry2 = carry.clone();
-
-        assert_eq!(
-            mac(a, b, c, &mut carry),
-            mac_with_carry(a, b, c, &mut carry2)
-        );
-        assert_eq!(carry, carry2);
-    }
 }
 
 #[cfg(test)]
