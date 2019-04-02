@@ -1,6 +1,6 @@
-use {Field, PrimeField, PrimeFieldDecodingError, PrimeFieldRepr, SqrtField};
-use std::cmp::Ordering;
 use super::fq2::Fq2;
+use std::cmp::Ordering;
+use {Field, PrimeField, PrimeFieldDecodingError, PrimeFieldRepr, SqrtField};
 
 // q = 4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787
 const MODULUS: FqRepr = FqRepr([
@@ -2135,15 +2135,14 @@ fn test_fq_repr_sub_noborrow() {
         0x7c0577a26f59d5,
     ]));
     assert!(
-        t
-            == FqRepr([
-                0x40a12b8967c54bae,
-                0xdeae37a0837d0d7b,
-                0xe592c487bae374e,
-                0xaf26bbc934462a61,
-                0x32d6cc6e2b7a4a03,
-                0xcdaf23e091c0313
-            ])
+        t == FqRepr([
+            0x40a12b8967c54bae,
+            0xdeae37a0837d0d7b,
+            0xe592c487bae374e,
+            0xaf26bbc934462a61,
+            0x32d6cc6e2b7a4a03,
+            0xcdaf23e091c0313
+        ])
     );
 
     for _ in 0..1000 {
@@ -2223,15 +2222,14 @@ fn test_fq_repr_add_nocarry() {
         0x7c0577a26f59d5,
     ]));
     assert!(
-        t
-            == FqRepr([
-                0xcfae1db798be8c04,
-                0x999906db15a10d5a,
-                0x270fa8d9defc6f79,
-                0x83abb199c240f7b6,
-                0x27469abae93e1ff6,
-                0xdd2fd2d4dfab6be
-            ])
+        t == FqRepr([
+            0xcfae1db798be8c04,
+            0x999906db15a10d5a,
+            0x270fa8d9defc6f79,
+            0x83abb199c240f7b6,
+            0x27469abae93e1ff6,
+            0xdd2fd2d4dfab6be
+        ])
     );
 
     // Test for the associativity of addition.
@@ -2296,16 +2294,15 @@ fn test_fq_is_valid() {
     a.0.sub_noborrow(&FqRepr::from(1));
     assert!(a.is_valid());
     assert!(Fq(FqRepr::from(0)).is_valid());
-    assert!(
-        Fq(FqRepr([
-            0xdf4671abd14dab3e,
-            0xe2dc0c9f534fbd33,
-            0x31ca6c880cc444a6,
-            0x257a67e70ef33359,
-            0xf9b29e493f899b36,
-            0x17c8be1800b9f059
-        ])).is_valid()
-    );
+    assert!(Fq(FqRepr([
+        0xdf4671abd14dab3e,
+        0xe2dc0c9f534fbd33,
+        0x31ca6c880cc444a6,
+        0x257a67e70ef33359,
+        0xf9b29e493f899b36,
+        0x17c8be1800b9f059
+    ]))
+    .is_valid());
     assert!(!Fq(FqRepr([
         0xffffffffffffffff,
         0xffffffffffffffff,
@@ -2313,7 +2310,8 @@ fn test_fq_is_valid() {
         0xffffffffffffffff,
         0xffffffffffffffff,
         0xffffffffffffffff
-    ])).is_valid());
+    ]))
+    .is_valid());
 
     let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
 
@@ -2575,15 +2573,14 @@ fn test_fq_mul_assign() {
         0x1162b680fb8e9566,
     ])));
     assert!(
-        tmp
-            == Fq(FqRepr([
-                0x9dc4000001ebfe14,
-                0x2850078997b00193,
-                0xa8197f1abb4d7bf,
-                0xc0309573f4bfe871,
-                0xf48d0923ffaf7620,
-                0x11d4b58c7a926e66
-            ]))
+        tmp == Fq(FqRepr([
+            0x9dc4000001ebfe14,
+            0x2850078997b00193,
+            0xa8197f1abb4d7bf,
+            0xc0309573f4bfe871,
+            0xf48d0923ffaf7620,
+            0x11d4b58c7a926e66
+        ]))
     );
 
     let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
@@ -2650,7 +2647,8 @@ fn test_fq_squaring() {
             0xdc05c659b4e15b27,
             0x79361e5a802c6a23,
             0x24bcbe5d51b9a6f
-        ])).unwrap()
+        ]))
+        .unwrap()
     );
 
     let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
@@ -2780,16 +2778,15 @@ fn test_fq_sqrt() {
 #[test]
 fn test_fq_from_into_repr() {
     // q + 1 should not be in the field
-    assert!(
-        Fq::from_repr(FqRepr([
-            0xb9feffffffffaaac,
-            0x1eabfffeb153ffff,
-            0x6730d2a0f6b0f624,
-            0x64774b84f38512bf,
-            0x4b1ba7b6434bacd7,
-            0x1a0111ea397fe69a
-        ])).is_err()
-    );
+    assert!(Fq::from_repr(FqRepr([
+        0xb9feffffffffaaac,
+        0x1eabfffeb153ffff,
+        0x6730d2a0f6b0f624,
+        0x64774b84f38512bf,
+        0x4b1ba7b6434bacd7,
+        0x1a0111ea397fe69a
+    ]))
+    .is_err());
 
     // q should not be in the field
     assert!(Fq::from_repr(Fq::char()).is_err());
