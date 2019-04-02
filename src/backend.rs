@@ -179,16 +179,18 @@ pub mod avx2 {
 
     #[inline(never)]
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
-        let a = a.0;
-        let b = b.0;
+        let mut out_0 = u32x8::default();
+        let mut out_1 = u32x8::default();
 
-        let mut out = [0u32; 16];
         let mut x_0: u32x8;
         let mut x_1: u32x8;
         let mut t: u32x8;
 
         macro_rules! round0 {
-            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr) => {
+            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr, [
+                $l0:expr, $l1:expr, $l2:expr, $l3:expr,
+                $l4:expr, $l5:expr, $l6:expr, $l7:expr
+            ]) => {
                 $x_0 = $x_0 + m_hi($b[0], $t);
                 $x_1 = $x_1 + m_hi_half($b[1], $t);
 
@@ -199,14 +201,17 @@ pub mod avx2 {
                 $x_1 = $x_1 + m_lo_half($b[1], $t);
 
                 // store x_0[0] at x[i]
-                $out[$i] = $x_0.extract(0);
+                $out = shuffle!($out, $x_0, [$l0, $l1, $l2, $l3, $l4, $l5, $l6, $l7]);
 
                 $x_0 = shr32($x_0);
                 $x_1 = shr32($x_1);
             };
         }
         macro_rules! round1 {
-            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr) => {
+            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr, [
+                $l0:expr, $l1:expr, $l2:expr, $l3:expr,
+                $l4:expr, $l5:expr, $l6:expr, $l7:expr
+            ]) => {
                 $x_0 = $x_0 + m_hi($b[0], $t);
                 $x_1 = $x_1 + m_hi_half($b[1], $t);
 
@@ -217,7 +222,7 @@ pub mod avx2 {
                 $x_1 = $x_1 + m_lo_half($b[1], $t);
 
                 // store x_0[0] at x[i]
-                $out[$i] = $x_0.extract(0);
+                $out = shuffle!($out, $x_0, [$l0, $l1, $l2, $l3, $l4, $l5, $l6, $l7]);
 
                 $x_0 = shr32($x_0);
                 $x_1 = shr32($x_1);
@@ -226,40 +231,41 @@ pub mod avx2 {
 
         {
             // first round
-            let a_i = a[0].extract(0);
+            let a_i = a.0[0].extract(0);
             t = u32x8::splat(a_i);
 
-            x_0 = m_lo(b[0], t);
-            x_1 = m_lo_half(b[1], t);
+            x_0 = m_lo(b.0[0], t);
+            x_1 = m_lo_half(b.0[1], t);
 
             // store x_0[0] at x[i]
-            out[0] = x_0.extract(0);
+            out_0 = shuffle!(out_0, x_0, [8, 1, 2, 3, 4, 5, 6, 7]);
 
             x_0 = shr32(x_0);
             x_1 = shr32(x_1);
         }
 
-        round0!(1, a, b, t, out, x_0, x_1);
-        round0!(2, a, b, t, out, x_0, x_1);
-        round0!(3, a, b, t, out, x_0, x_1);
-        round0!(4, a, b, t, out, x_0, x_1);
-        round0!(5, a, b, t, out, x_0, x_1);
-        round0!(6, a, b, t, out, x_0, x_1);
-        round0!(7, a, b, t, out, x_0, x_1);
-        round1!(8, a, b, t, out, x_0, x_1);
-        round1!(9, a, b, t, out, x_0, x_1);
-        round1!(10, a, b, t, out, x_0, x_1);
-        round1!(11, a, b, t, out, x_0, x_1);
-        round1!(12, a, b, t, out, x_0, x_1);
-        round1!(13, a, b, t, out, x_0, x_1);
-        round1!(14, a, b, t, out, x_0, x_1);
+        round0!(1, a.0, b.0, t, out_0, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
+        round0!(2, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 8, 3, 4, 5, 6, 7]);
+        round0!(3, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 8, 4, 5, 6, 7]);
+        round0!(4, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
+        round0!(5, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
+        round0!(6, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
+        round0!(7, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 5, 6, 8]);
+
+        round1!(8, a.0, b.0, t, out_1, x_0, x_1, [8, 1, 2, 3, 4, 5, 6, 7]);
+        round1!(9, a.0, b.0, t, out_1, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
+        round1!(10, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 8, 3, 4, 5, 6, 7]);
+        round1!(11, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 8, 4, 5, 6, 7]);
+        round1!(12, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
+        round1!(13, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
+        round1!(14, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
 
         {
             // last round
-            x_0 = x_0 + m_hi(b[0], t);
-            x_1 = x_1 + m_hi_half(b[1], t);
+            x_0 = x_0 + m_hi(b.0[0], t);
+            x_1 = x_1 + m_hi_half(b.0[1], t);
             // store x_0[0] at x[i]
-            out[15] = x_0.extract(0);
+            out_1 = shuffle!(out_1, x_0, [0, 1, 2, 3, 4, 5, 6, 8]);
 
             x_0 = shr32(x_0);
             x_1 = shr32(x_1);
@@ -268,16 +274,7 @@ pub mod avx2 {
         // store x_q-1..x_0 starting at x[m+1]
         // out[m..].copy_from_slice(x_0.into_bits());
 
-        FqUnreduced([
-            u32x8::new(
-                out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
-            ),
-            u32x8::new(
-                out[8], out[9], out[10], out[11], out[12], out[13], out[14], out[15],
-            ),
-            x_0,
-            x_1,
-        ])
+        FqUnreduced([out_0, out_1, x_0, x_1])
     }
 
     #[inline(always)]
