@@ -13,38 +13,20 @@ pub mod u64 {
             (other.0)[0].write_to_slice_unaligned(&mut imm[..8]);
             (other.0)[1].write_to_slice_unaligned(&mut imm[8..]);
 
-            // now extract the low 24 bits of each u32 and combine them to u64s
             let mut res = [0u64; 6];
 
             #[inline(always)]
-            fn e24(a: u32) -> u64 {
-                (a & 0b0000_0000_1111_1111_1111_1111_1111_1111) as u64
+            fn c(a: u32, b: u32) -> u64 {
+                ((b as u64) << 32) | (a as u64)
             }
 
-            #[inline(always)]
-            fn e16(a: u32) -> u64 {
-                (a & 0b0000_0000_0000_0000_1111_1111_1111_1111) as u64
-            }
+            res[0] = c(imm[0], imm[1]);
+            res[1] = c(imm[2], imm[3]);
+            res[2] = c(imm[4], imm[5]);
+            res[3] = c(imm[6], imm[7]);
 
-            #[inline(always)]
-            fn e8(a: u32) -> u64 {
-                (a & 0b0000_0000_0000_0000_0000_0000_1111_1111) as u64
-            }
-
-            // 16 + 24 + 24
-            res[0] = e16(imm[2]) << 48 | e24(imm[1]) << 24 | e24(imm[0]);
-            // 8 + 24 + 24 + 8
-            res[1] = e8(imm[5]) << 56 | e24(imm[4]) << 32 | e24(imm[3]) << 8 | e24(imm[2]) >> 16;
-            // 24 + 24 + 16
-            res[2] = e24(imm[7]) << 40 | e24(imm[6]) << 16 | e24(imm[5]) >> 8;
-
-            // 16 + 24 + 24
-            res[3] = e16(imm[10]) << 48 | e24(imm[9]) << 24 | e24(imm[8]);
-            // 8 + 24 + 24 + 8
-            res[4] =
-                e8(imm[13]) << 56 | e24(imm[12]) << 32 | e24(imm[11]) << 8 | e24(imm[10]) >> 16;
-            // 24 + 24 + 16
-            res[5] = e24(imm[15]) << 40 | e24(imm[14]) << 16 | e24(imm[13]) >> 8;
+            res[4] = c(imm[8], imm[10]);
+            res[5] = c(imm[12], imm[14]);
 
             backend::u64::FqReduced(res)
         }
@@ -113,8 +95,7 @@ pub mod u64 {
 
 #[cfg(target_feature = "avx2")]
 pub mod avx2 {
-    // 381 -> 16 * 24bit = 384
-    // this means a reduced element only uses the 21 bits in the last limb.
+    // 381 -> 12 * 32bit = 384
 
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
@@ -125,11 +106,10 @@ pub mod avx2 {
 
     use backend;
 
-    const MASK24: u32 = 0b0000_0000_1111_1111_1111_1111_1111_1111;
-
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FqUnreduced(pub(crate) [u32x8; 4]);
 
+    // Layout: [[a_0, .., a_7], [a_8, 0, a_9, 0, a_10, 0, a_11, 0]]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FqReduced(pub(crate) [u32x8; 2]);
 
@@ -145,50 +125,25 @@ pub mod avx2 {
             let mut res = [0u64; 12];
 
             #[inline(always)]
-            fn e24(a: u32) -> u64 {
-                (a & 0b0000_0000_1111_1111_1111_1111_1111_1111) as u64
+            fn c(a: u32, b: u32) -> u64 {
+                ((b as u64) << 32) | (a as u64)
             }
 
-            #[inline(always)]
-            fn e16(a: u32) -> u64 {
-                (a & 0b0000_0000_0000_0000_1111_1111_1111_1111) as u64
-            }
+            res[0] = c(imm[0], imm[1]);
+            res[1] = c(imm[2], imm[3]);
+            res[2] = c(imm[4], imm[5]);
+            res[3] = c(imm[6], imm[7]);
 
-            #[inline(always)]
-            fn e8(a: u32) -> u64 {
-                (a & 0b0000_0000_0000_0000_0000_0000_1111_1111) as u64
-            }
+            res[4] = c(imm[8], imm[10]);
+            res[5] = c(imm[12], imm[14]);
 
-            // 16 + 24 + 24
-            res[0] = e16(imm[2]) << 48 | e24(imm[1]) << 24 | e24(imm[0]);
-            // 8 + 24 + 24 + 8
-            res[1] = e8(imm[5]) << 56 | e24(imm[4]) << 32 | e24(imm[3]) << 8 | e24(imm[2]) >> 16;
-            // 24 + 24 + 16
-            res[2] = e24(imm[7]) << 40 | e24(imm[6]) << 16 | e24(imm[5]) >> 8;
+            res[6] = c(imm[16], imm[17]);
+            res[7] = c(imm[18], imm[19]);
+            res[8] = c(imm[20], imm[21]);
+            res[9] = c(imm[22], imm[23]);
 
-            // 16 + 24 + 24
-            res[3] = e16(imm[10]) << 48 | e24(imm[9]) << 24 | e24(imm[8]);
-            // 8 + 24 + 24 + 8
-            res[4] =
-                e8(imm[13]) << 56 | e24(imm[12]) << 32 | e24(imm[11]) << 8 | e24(imm[10]) >> 16;
-            // 24 + 24 + 16
-            res[5] = e24(imm[15]) << 40 | e24(imm[14]) << 16 | e24(imm[13]) >> 8;
-
-            // 16 + 24 + 24
-            res[6] = e16(imm[18]) << 48 | e24(imm[17]) << 24 | e24(imm[16]);
-            // 8 + 24 + 24 + 8
-            res[7] =
-                e8(imm[21]) << 56 | e24(imm[20]) << 32 | e24(imm[19]) << 8 | e24(imm[18]) >> 16;
-            // 24 + 24 + 16
-            res[8] = e24(imm[23]) << 40 | e24(imm[22]) << 16 | e24(imm[21]) >> 8;
-
-            // 16 + 24 + 24
-            res[9] = e16(imm[26]) << 48 | e24(imm[25]) << 24 | e24(imm[24]);
-            // 8 + 24 + 24 + 8
-            res[10] =
-                e8(imm[29]) << 56 | e24(imm[28]) << 32 | e24(imm[27]) << 8 | e24(imm[26]) >> 16;
-            // 24 + 24 + 16
-            res[11] = e24(imm[31]) << 40 | e24(imm[30]) << 16 | e24(imm[29]) >> 8;
+            res[10] = c(imm[24], imm[26]);
+            res[11] = c(imm[28], imm[30]);
 
             res
         }
@@ -197,27 +152,26 @@ pub mod avx2 {
     impl ::rand::Rand for FqReduced {
         #[inline(always)]
         fn rand<R: ::rand::Rng>(rng: &mut R) -> Self {
-            // Generates 24 bit random values
             FqReduced([
                 u32x8::new(
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
+                    rng.gen::<u32>(),
                 ),
                 u32x8::new(
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
-                    rng.gen::<u32>() & MASK24,
+                    rng.gen::<u32>(),
+                    0,
+                    rng.gen::<u32>(),
+                    0,
+                    rng.gen::<u32>(),
+                    0,
+                    rng.gen::<u32>(),
+                    0,
                 ),
             ])
         }
@@ -244,9 +198,8 @@ pub mod avx2 {
         (a, b)
     }
 
+    #[inline(never)]
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
-        let m = 16;
-
         let a = a.0;
         let b = b.0;
 
@@ -255,32 +208,63 @@ pub mod avx2 {
         let mut x_1 = u32x8::splat(0);
         let mut t = u32x8::splat(0);
 
-        let b_0_s: u32x8 = shuffle!(b[0], [1, 0, 3, 2, 5, 4, 7, 6]);
-        let b_1_s: u32x8 = shuffle!(b[1], [1, 0, 3, 2, 5, 4, 7, 6]);
+        macro_rules! round0 {
+            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr) => {
+                let tp = $t;
 
-        for i in 0..m {
-            let tp = t;
-            let tp_s = shuffle!(t, [1, 0, 3, 2, 5, 4, 7, 6]);
+                let a_i = $a[0].extract($i);
+                $t = u32x8::splat(a_i);
 
-            if i == m {
-                t = u32x8::splat(0);
-            } else {
-                let a_i = if i < 8 {
-                    a[0].extract(i)
-                } else {
-                    a[1].extract(i - 8)
-                };
-                t = u32x8::splat(a_i);
-            }
+                $x_0 = x_0 + m_lo($b[0], $t) + m_hi($b[0], tp);
+                $x_1 = x_1 + m_lo_half($b[1], $t) + m_hi_half($b[1], tp);
 
-            x_0 = x_0 + m_lo(b[0], t);
-            x_0 = x_0 + m_hi(b[0], tp, b_0_s, tp_s);
+                // store x_0[0] at x[i]
+                $out[$i] = $x_0.extract(0);
 
-            x_1 = x_1 + m_lo(b[1], t);
-            x_1 = x_1 + m_hi(b[1], tp, b_1_s, tp_s);
+                $x_0 = shr32($x_0);
+                $x_1 = shr32($x_1);
+            };
+        }
+        macro_rules! round1 {
+            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr) => {
+                let tp = $t;
 
+                let a_i = $a[1].extract($i - 8);
+                $t = u32x8::splat(a_i);
+
+                $x_0 = x_0 + m_lo($b[0], $t) + m_hi($b[0], tp);
+                $x_1 = x_1 + m_lo_half($b[1], $t) + m_hi_half($b[1], tp);
+
+                // store x_0[0] at x[i]
+                $out[$i] = $x_0.extract(0);
+
+                $x_0 = shr32($x_0);
+                $x_1 = shr32($x_1);
+            };
+        }
+
+        round0!(0, a, b, t, out, x_0, x_1);
+        round0!(1, a, b, t, out, x_0, x_1);
+        round0!(2, a, b, t, out, x_0, x_1);
+        round0!(3, a, b, t, out, x_0, x_1);
+        round0!(4, a, b, t, out, x_0, x_1);
+        round0!(5, a, b, t, out, x_0, x_1);
+        round0!(6, a, b, t, out, x_0, x_1);
+        round0!(7, a, b, t, out, x_0, x_1);
+        round1!(8, a, b, t, out, x_0, x_1);
+        round1!(9, a, b, t, out, x_0, x_1);
+        round1!(10, a, b, t, out, x_0, x_1);
+        round1!(11, a, b, t, out, x_0, x_1);
+        round1!(12, a, b, t, out, x_0, x_1);
+        round1!(13, a, b, t, out, x_0, x_1);
+        round1!(14, a, b, t, out, x_0, x_1);
+
+        {
+            // last round
+            x_0 = x_0 + m_hi(b[0], t);
+            x_1 = x_1 + m_hi_half(b[1], t);
             // store x_0[0] at x[i]
-            out[i] = x_0.extract(0);
+            out[15] = x_0.extract(0);
 
             x_0 = shr32(x_0);
             x_1 = shr32(x_1);
@@ -308,12 +292,33 @@ pub mod avx2 {
     }
 
     #[inline(always)]
-    fn m_hi(x: u32x8, y: u32x8, x_s: u32x8, y_s: u32x8) -> u32x8 {
+    fn m_hi(x: u32x8, y: u32x8) -> u32x8 {
         // mul lo 32 bits into 64 bits
         let a: u32x8 = unsafe { _mm256_mul_epu32(x.into_bits(), y.into_bits()) }.into_bits();
+
+        let x_s: u32x8 = shuffle!(x, [1, 0, 3, 2, 5, 4, 7, 6]);
+        let y_s: u32x8 = shuffle!(y, [1, 0, 3, 2, 5, 4, 7, 6]);
         let b: u32x8 = unsafe { _mm256_mul_epu32(x_s.into_bits(), y_s.into_bits()) }.into_bits();
 
         shuffle!(a, b, [1, 9, 3, 11, 5, 13, 7, 15])
+    }
+
+    // Assumes that `x` is of the layout (a0, 0, a1, 0, ..).
+    #[inline(always)]
+    fn m_hi_half(x: u32x8, y: u32x8) -> u32x8 {
+        // mul lo 32 bits into 64 bits
+        let a: u32x8 = unsafe { _mm256_mul_epu32(x.into_bits(), y.into_bits()) }.into_bits();
+
+        let zero = u32x8::new(0, 0, 0, 0, 0, 0, 0, 0);
+        unsafe { _mm256_unpackhi_epi32(a.into_bits(), zero.into_bits()) }.into_bits()
+    }
+
+    // Assumes that `x` is of the layout (a0, 0, a1, 0, ..).
+    #[inline(always)]
+    fn m_lo_half(x: u32x8, y: u32x8) -> u32x8 {
+        let a: u32x8 = unsafe { _mm256_mullo_epi32(x.into_bits(), y.into_bits()) }.into_bits();
+        let zero = u32x8::new(0, 0, 0, 0, 0, 0, 0, 0);
+        unsafe { _mm256_unpacklo_epi32(a.into_bits(), zero.into_bits()) }.into_bits()
     }
 
     #[inline(always)]
@@ -688,10 +693,7 @@ pub mod avx2 {
             let a: FqReduced = rng.gen();
             let b: FqReduced = rng.gen();
 
-            let a_s: u32x8 = shuffle!((a.0)[0], [1, 0, 3, 2, 5, 4, 7, 6]);
-            let b_s: u32x8 = shuffle!((b.0)[0], [1, 0, 3, 2, 5, 4, 7, 6]);
-
-            let c = m_hi(a.0[0], b.0[0], a_s, b_s);
+            let c = m_hi(a.0[0], b.0[0]);
 
             let x = u32x8::new(0, 1, 2, 3, 4, 5, 6, 7);
             let x_s: u32x8 = unsafe {
