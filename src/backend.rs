@@ -250,10 +250,6 @@ pub mod avx2 {
         let a = a.0;
         let b = b.0;
 
-        let mut a_flat = [0u32; 16];
-        a[0].write_to_slice_unaligned(&mut a_flat[..8]);
-        a[1].write_to_slice_unaligned(&mut a_flat[8..]);
-
         let mut out = [0u32; 16];
         let mut x_0 = u32x8::splat(0);
         let mut x_1 = u32x8::splat(0);
@@ -269,17 +265,15 @@ pub mod avx2 {
             if i == m {
                 t = u32x8::splat(0);
             } else {
-                t = u32x8::splat(a_flat[i]);
+                let a_i = if i < 8 {
+                    a[0].extract(i)
+                } else {
+                    a[1].extract(i - 8)
+                };
+                t = u32x8::splat(a_i);
             }
 
-            // x_0 = x_0 + m_lo(b[0], t);
-            x_0 = unsafe {
-                let bc: __m256 = b[0].into_bits();
-                let tc: __m256 = t.into_bits();
-                let xc: __m256 = x_0.into_bits();
-                _mm256_fmadd_ps(bc, tc, xc)
-            }
-            .into_bits();
+            x_0 = x_0 + m_lo(b[0], t);
             x_0 = x_0 + m_hi(b[0], tp, b_0_s, tp_s);
 
             x_1 = x_1 + m_lo(b[1], t);
