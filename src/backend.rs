@@ -177,7 +177,7 @@ pub mod avx2 {
         }
     }
 
-    #[inline(never)]
+    #[inline]
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
         let mut out_0 = u32x8::default();
         let mut out_1 = u32x8::default();
@@ -186,7 +186,7 @@ pub mod avx2 {
         let mut x_1: u32x8;
         let mut t: u32x8;
 
-        macro_rules! round0 {
+        macro_rules! round {
             ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr, [
                 $l0:expr, $l1:expr, $l2:expr, $l3:expr,
                 $l4:expr, $l5:expr, $l6:expr, $l7:expr
@@ -194,28 +194,7 @@ pub mod avx2 {
                 $x_0 = $x_0 + m_hi($b[0], $t);
                 $x_1 = $x_1 + m_hi_half($b[1], $t);
 
-                let a_i = $a[0].extract($i);
-                $t = u32x8::splat(a_i);
-
-                $x_0 = $x_0 + m_lo($b[0], $t);
-                $x_1 = $x_1 + m_lo_half($b[1], $t);
-
-                // store x_0[0] at x[i]
-                $out = shuffle!($out, $x_0, [$l0, $l1, $l2, $l3, $l4, $l5, $l6, $l7]);
-
-                $x_0 = shr32($x_0);
-                $x_1 = shr32($x_1);
-            };
-        }
-        macro_rules! round1 {
-            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr, [
-                $l0:expr, $l1:expr, $l2:expr, $l3:expr,
-                $l4:expr, $l5:expr, $l6:expr, $l7:expr
-            ]) => {
-                $x_0 = $x_0 + m_hi($b[0], $t);
-                $x_1 = $x_1 + m_hi_half($b[1], $t);
-
-                let a_i = $a[1].extract($i - 8);
+                let a_i = $a.extract($i);
                 $t = u32x8::splat(a_i);
 
                 $x_0 = $x_0 + m_lo($b[0], $t);
@@ -244,21 +223,21 @@ pub mod avx2 {
             x_1 = shr32(x_1);
         }
 
-        round0!(1, a.0, b.0, t, out_0, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
-        round0!(2, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 8, 3, 4, 5, 6, 7]);
-        round0!(3, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 8, 4, 5, 6, 7]);
-        round0!(4, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
-        round0!(5, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
-        round0!(6, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
-        round0!(7, a.0, b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 5, 6, 8]);
+        round!(1, a.0[0], b.0, t, out_0, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
+        round!(2, a.0[0], b.0, t, out_0, x_0, x_1, [0, 1, 8, 3, 4, 5, 6, 7]);
+        round!(3, a.0[0], b.0, t, out_0, x_0, x_1, [0, 1, 2, 8, 4, 5, 6, 7]);
+        round!(4, a.0[0], b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
+        round!(5, a.0[0], b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
+        round!(6, a.0[0], b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
+        round!(7, a.0[0], b.0, t, out_0, x_0, x_1, [0, 1, 2, 3, 4, 5, 6, 8]);
 
-        round1!(8, a.0, b.0, t, out_1, x_0, x_1, [8, 1, 2, 3, 4, 5, 6, 7]);
-        round1!(9, a.0, b.0, t, out_1, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
-        round1!(10, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 8, 3, 4, 5, 6, 7]);
-        round1!(11, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 8, 4, 5, 6, 7]);
-        round1!(12, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
-        round1!(13, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
-        round1!(14, a.0, b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
+        round!(0, a.0[1], b.0, t, out_1, x_0, x_1, [8, 1, 2, 3, 4, 5, 6, 7]);
+        round!(1, a.0[1], b.0, t, out_1, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
+        round!(2, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 8, 3, 4, 5, 6, 7]);
+        round!(3, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 8, 4, 5, 6, 7]);
+        round!(4, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
+        round!(5, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
+        round!(6, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
 
         {
             // last round
