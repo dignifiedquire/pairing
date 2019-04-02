@@ -678,27 +678,42 @@ pub mod avx512 {
         i32,
         i32,
     );
-
+    #[repr(simd)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Wu32x16(
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+    );
     #[allow(improper_ctypes)]
     extern "C" {
         #[link_name = "llvm.x86.avx512.pmulu.dq.512"]
-        fn _mm512_mul_epu32(a: u32x16, y: u32x16) -> u32x16;
+        fn _mm512_mul_epu32(a: u32x16, b: u32x16) -> u32x16;
 
-        #[link_name = "llvm.x86.avx512.vpuncpckldq.uq.512"]
-        fn _mm512_unpackhi_epi32(a: u32x16, y: u32x16) -> u32x16;
-
-        #[link_name = "llvm.x86.avx512.vpunpckhdq.uq.512"]
-        fn _mm512_unpacklo_epi32(a: u32x16, y: u32x16) -> u32x16;
+        #[link_name = "llvm.x86.avx512.psrl.dq.512"]
+        fn _mm512_srli_epi32(a: u32x16, imm8: i32) -> u32x16;
     }
 
     extern "platform-intrinsic" {
         pub fn simd_mul<T>(x: T, y: T) -> T;
     }
 
-    #[cfg(target_arch = "x86_64")]
     unsafe fn _mm512_mullo_epi32(a: u32x16, b: u32x16) -> u32x16 {
         let a_i: Wi32x16 = std::mem::transmute(a);
-        let b_i: Wi32x16 = std::mem::transmute(a);
+        let b_i: Wi32x16 = std::mem::transmute(b);
 
         std::mem::transmute(simd_mul(a_i, b_i))
     }
@@ -770,50 +785,198 @@ pub mod avx512 {
 
     #[inline(never)]
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
-        let a = a.0;
-        let b = b.0;
+        // let a = a.0;
+        // let b = b.0;
 
-        let mut out = [0u32; 16];
-        let mut x_0 = u32x16::splat(0);
-        let mut t = u32x16::splat(0);
+        let mut out = u32x16::default();
+        let mut x_0: u32x16;
+        let mut t: u32x16;
 
         macro_rules! round {
-            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr) => {
-                let tp = $t;
+            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, [
+                $l0:expr, $l1:expr, $l2:expr, $l3:expr,
+                $l4:expr, $l5:expr, $l6:expr, $l7:expr,
+                $l8:expr, $l9:expr, $l10:expr, $l11:expr,
+                $l12:expr, $l13:expr, $l14:expr, $l15:expr
+            ]) => {
+                $x_0 = $x_0 + m_hi($b, $t);
 
-                let a_i = $a.extract($i);
+                let a_i = $a.0.extract($i);
                 $t = u32x16::splat(a_i);
-
-                $x_0 = x_0 + m_lo($b, $t) + m_hi($b, tp);
+                $x_0 = $x_0 + m_lo($b, $t);
 
                 // store x_0[0] at x[i]
-                $out[$i] = $x_0.extract(0);
+                // $out[$i] = $x_0.extract(0);
+                $out = shuffle!(
+                    $out,
+                    $x_0,
+                    [
+                        $l0, $l1, $l2, $l3, $l4, $l5, $l6, $l7, $l8, $l9, $l10, $l11, $l12, $l13,
+                        $l14, $l15
+                    ]
+                );
 
                 $x_0 = shr32($x_0);
             };
         }
 
-        round!(0, a, b, t, out, x_0);
-        round!(1, a, b, t, out, x_0);
-        round!(2, a, b, t, out, x_0);
-        round!(3, a, b, t, out, x_0);
-        round!(4, a, b, t, out, x_0);
-        round!(5, a, b, t, out, x_0);
-        round!(6, a, b, t, out, x_0);
-        round!(7, a, b, t, out, x_0);
-        round!(8, a, b, t, out, x_0);
-        round!(9, a, b, t, out, x_0);
-        round!(10, a, b, t, out, x_0);
-        round!(11, a, b, t, out, x_0);
-        round!(12, a, b, t, out, x_0);
-        round!(13, a, b, t, out, x_0);
-        round!(14, a, b, t, out, x_0);
+        // TODO: move values such that the last 4 rows are empty and see if we can skip some operations
+
+        {
+            // first  round
+            let a_i = a.0.extract(0);
+            t = u32x16::splat(a_i);
+
+            x_0 = m_lo(b.0, t);
+
+            // store x_0[0] at x[i]
+            // out[0] = x_0.extract(0);
+            out = shuffle!(
+                out,
+                x_0,
+                [16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            );
+
+            x_0 = shr32(x_0);
+        }
+
+        round!(
+            1,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 16, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            2,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 16, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            3,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 16, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            4,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 16, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            5,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            6,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            7,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 16, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            8,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 16, 9, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            9,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 10, 11, 12, 13, 14, 15]
+        );
+        round!(
+            10,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 11, 12, 13, 14, 15]
+        );
+        round!(
+            11,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 12, 13, 14, 15]
+        );
+        round!(
+            12,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 13, 14, 15]
+        );
+        round!(
+            13,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 14, 15]
+        );
+        round!(
+            14,
+            a,
+            b.0,
+            t,
+            out,
+            x_0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 15]
+        );
 
         {
             // last round
-            x_0 = x_0 + m_hi(b, t);
+            x_0 = x_0 + m_hi(b.0, t);
             // store x_0[0] at x[i]
-            out[15] = x_0.extract(0);
+            out = shuffle!(
+                out,
+                x_0,
+                [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16]
+            );
+            // out[15] = x_0.extract(0);
 
             x_0 = shr32(x_0);
         }
@@ -821,26 +984,15 @@ pub mod avx512 {
         // store x_q-1..x_0 starting at x[m+1]
         // out[m..].copy_from_slice(x_0.into_bits());
 
-        FqUnreduced([
-            u32x16::new(
-                out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8], out[9],
-                out[10], out[11], out[12], out[13], out[14], out[15],
-            ),
-            x_0,
-        ])
+        FqUnreduced([out, x_0])
     }
 
-    #[inline(always)]
+    #[inline]
     fn shr32(x: u32x16) -> u32x16 {
-        let zero = u32x16::splat(0);
-        shuffle!(
-            x,
-            zero,
-            [16, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
-        )
+        unsafe { _mm512_srli_epi32(x.into_bits(), 32) }.into_bits()
     }
 
-    #[inline(always)]
+    #[inline]
     fn m_hi(x: u32x16, y: u32x16) -> u32x16 {
         // mul lo 32 bits into 64 bits
         let a: u32x16 = unsafe { _mm512_mul_epu32(x.into_bits(), y.into_bits()) }.into_bits();
@@ -856,7 +1008,7 @@ pub mod avx512 {
         )
     }
 
-    #[inline(always)]
+    #[inline]
     fn m_lo(x: u32x16, y: u32x16) -> u32x16 {
         unsafe { _mm512_mullo_epi32(x, y) }
     }
