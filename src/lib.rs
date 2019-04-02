@@ -14,8 +14,17 @@
 #![cfg_attr(feature = "clippy", allow(new_without_default_derive))]
 // Force public structures to implement Debug
 #![deny(missing_debug_implementations)]
+#![feature(
+    simd_ffi,
+    link_llvm_intrinsics,
+    stdsimd,
+    repr_simd,
+    platform_intrinsics
+)]
 
 extern crate byteorder;
+#[cfg(all(target_feature = "avx512f"))]
+extern crate core_arch;
 #[cfg(all(target_feature = "avx2"))]
 extern crate packed_simd;
 extern crate rand;

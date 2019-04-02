@@ -16,6 +16,7 @@ rand = "0.4"
 byteorder = "1"
 clippy = { version = "0.0.186", optional = true }
 packed_simd = { version = "0.3.3", features = ["into_bits"] }
+core_arch = "*"
 
 [features]
 unstable-features = ["expose-arith"]

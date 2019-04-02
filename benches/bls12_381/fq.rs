@@ -207,6 +207,26 @@ fn bench_fq_mul_raw_avx2(b: &mut ::test::Bencher) {
 }
 
 #[bench]
+#[cfg(target_feature = "avx512f")]
+fn bench_fq_mul_raw_avx512f(b: &mut ::test::Bencher) {
+    use pairing::backend::avx512;
+    use rand::Rng;
+
+    const SAMPLES: usize = 1000;
+
+    let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+    let v: Vec<(avx512::FqReduced, avx512::FqReduced)> =
+        (0..SAMPLES).map(|_| (rng.gen(), rng.gen())).collect();
+
+    let mut count = 0;
+    b.iter(|| {
+        black_box(avx512::mul(&v[count].0, &v[count].1));
+        count = (count + 1) % SAMPLES;
+    });
+}
+
+#[bench]
 fn bench_fq_square(b: &mut ::test::Bencher) {
     const SAMPLES: usize = 1000;
 

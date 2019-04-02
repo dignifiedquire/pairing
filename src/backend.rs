@@ -731,3 +731,219 @@ pub mod avx2 {
         }
     }
 }
+
+#[cfg(target_feature = "avx512f")]
+pub mod avx512 {
+    // 381 -> 12 * 32bit = 384
+
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    use packed_simd::*;
+
+    use backend;
+    #[repr(simd)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Wi32x16(
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+    );
+
+    #[allow(improper_ctypes)]
+    extern "C" {
+        #[link_name = "llvm.x86.avx512.pmulu.dq.512"]
+        fn _mm512_mul_epu32(a: u32x16, y: u32x16) -> u32x16;
+
+        #[link_name = "llvm.x86.avx512.vpuncpckldq.uq.512"]
+        fn _mm512_unpackhi_epi32(a: u32x16, y: u32x16) -> u32x16;
+
+        #[link_name = "llvm.x86.avx512.vpunpckhdq.uq.512"]
+        fn _mm512_unpacklo_epi32(a: u32x16, y: u32x16) -> u32x16;
+    }
+
+    extern "platform-intrinsic" {
+        pub fn simd_mul<T>(x: T, y: T) -> T;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn _mm512_mullo_epi32(a: u32x16, b: u32x16) -> u32x16 {
+        let a_i: Wi32x16 = std::mem::transmute(a);
+        let b_i: Wi32x16 = std::mem::transmute(a);
+
+        std::mem::transmute(simd_mul(a_i, b_i))
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FqUnreduced(pub(crate) [u32x16; 2]);
+
+    // Layout: [a_0, .., a_7, a_8, 0, a_9, 0, a_10, 0, a_11, 0]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FqReduced(pub(crate) u32x16);
+
+    impl From<FqUnreduced> for [u64; 12] {
+        fn from(other: FqUnreduced) -> [u64; 12] {
+            let mut imm = [0u32; 32];
+            (other.0)[0].write_to_slice_unaligned(&mut imm[..16]);
+            (other.0)[1].write_to_slice_unaligned(&mut imm[16..]);
+
+            // now extract the low 24 bits of each u32 and combine them to u64s
+            let mut res = [0u64; 12];
+
+            #[inline(always)]
+            fn c(a: u32, b: u32) -> u64 {
+                ((b as u64) << 32) | (a as u64)
+            }
+
+            res[0] = c(imm[0], imm[1]);
+            res[1] = c(imm[2], imm[3]);
+            res[2] = c(imm[4], imm[5]);
+            res[3] = c(imm[6], imm[7]);
+
+            res[4] = c(imm[8], imm[10]);
+            res[5] = c(imm[12], imm[14]);
+
+            res[6] = c(imm[16], imm[17]);
+            res[7] = c(imm[18], imm[19]);
+            res[8] = c(imm[20], imm[21]);
+            res[9] = c(imm[22], imm[23]);
+
+            res[10] = c(imm[24], imm[26]);
+            res[11] = c(imm[28], imm[30]);
+
+            res
+        }
+    }
+
+    impl ::rand::Rand for FqReduced {
+        #[inline(always)]
+        fn rand<R: ::rand::Rng>(rng: &mut R) -> Self {
+            FqReduced(u32x16::new(
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
+                0,
+                rng.gen::<u32>(),
+                0,
+                rng.gen::<u32>(),
+                0,
+                rng.gen::<u32>(),
+                0,
+            ))
+        }
+    }
+
+    #[inline(never)]
+    pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
+        let a = a.0;
+        let b = b.0;
+
+        let mut out = [0u32; 16];
+        let mut x_0 = u32x16::splat(0);
+        let mut t = u32x16::splat(0);
+
+        macro_rules! round {
+            ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr) => {
+                let tp = $t;
+
+                let a_i = $a.extract($i);
+                $t = u32x16::splat(a_i);
+
+                $x_0 = x_0 + m_lo($b, $t) + m_hi($b, tp);
+
+                // store x_0[0] at x[i]
+                $out[$i] = $x_0.extract(0);
+
+                $x_0 = shr32($x_0);
+            };
+        }
+
+        round!(0, a, b, t, out, x_0);
+        round!(1, a, b, t, out, x_0);
+        round!(2, a, b, t, out, x_0);
+        round!(3, a, b, t, out, x_0);
+        round!(4, a, b, t, out, x_0);
+        round!(5, a, b, t, out, x_0);
+        round!(6, a, b, t, out, x_0);
+        round!(7, a, b, t, out, x_0);
+        round!(8, a, b, t, out, x_0);
+        round!(9, a, b, t, out, x_0);
+        round!(10, a, b, t, out, x_0);
+        round!(11, a, b, t, out, x_0);
+        round!(12, a, b, t, out, x_0);
+        round!(13, a, b, t, out, x_0);
+        round!(14, a, b, t, out, x_0);
+
+        {
+            // last round
+            x_0 = x_0 + m_hi(b, t);
+            // store x_0[0] at x[i]
+            out[15] = x_0.extract(0);
+
+            x_0 = shr32(x_0);
+        }
+
+        // store x_q-1..x_0 starting at x[m+1]
+        // out[m..].copy_from_slice(x_0.into_bits());
+
+        FqUnreduced([
+            u32x16::new(
+                out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8], out[9],
+                out[10], out[11], out[12], out[13], out[14], out[15],
+            ),
+            x_0,
+        ])
+    }
+
+    #[inline(always)]
+    fn shr32(x: u32x16) -> u32x16 {
+        let zero = u32x16::splat(0);
+        shuffle!(
+            x,
+            zero,
+            [16, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        )
+    }
+
+    #[inline(always)]
+    fn m_hi(x: u32x16, y: u32x16) -> u32x16 {
+        // mul lo 32 bits into 64 bits
+        let a: u32x16 = unsafe { _mm512_mul_epu32(x.into_bits(), y.into_bits()) }.into_bits();
+
+        let x_s: u32x16 = shuffle!(x, [1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14]);
+        let y_s: u32x16 = shuffle!(y, [1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14]);
+        let b: u32x16 = unsafe { _mm512_mul_epu32(x_s.into_bits(), y_s.into_bits()) }.into_bits();
+
+        shuffle!(
+            a,
+            b,
+            [1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31]
+        )
+    }
+
+    #[inline(always)]
+    fn m_lo(x: u32x16, y: u32x16) -> u32x16 {
+        unsafe { _mm512_mullo_epi32(x, y) }
+    }
+}
