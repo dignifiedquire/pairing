@@ -177,46 +177,26 @@ pub mod avx2 {
         }
     }
 
-    /// Unpack 32-bit lanes into 64-bit lanes:
-    /// ```ascii,no_run
-    /// (a0, b0, a1, b1, c0, d0, c1, d1)
-    /// ```
-    /// into
-    /// ```ascii,no_run
-    /// (a0, 0, b0, 0, c0, 0, d0, 0)
-    /// (a1, 0, b1, 0, c1, 0, d1, 0)
-    /// ```
-    #[inline(always)]
-    fn unpack_pair(src: u32x8) -> (u32x8, u32x8) {
-        let a: u32x8;
-        let b: u32x8;
-        let zero = i32x8::new(0, 0, 0, 0, 0, 0, 0, 0);
-        unsafe {
-            a = _mm256_unpacklo_epi32(src.into_bits(), zero.into_bits()).into_bits();
-            b = _mm256_unpackhi_epi32(src.into_bits(), zero.into_bits()).into_bits();
-        }
-        (a, b)
-    }
-
     #[inline(never)]
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
         let a = a.0;
         let b = b.0;
 
         let mut out = [0u32; 16];
-        let mut x_0 = u32x8::splat(0);
-        let mut x_1 = u32x8::splat(0);
-        let mut t = u32x8::splat(0);
+        let mut x_0: u32x8;
+        let mut x_1: u32x8;
+        let mut t: u32x8;
 
         macro_rules! round0 {
             ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr) => {
-                let tp = $t;
+                $x_0 = $x_0 + m_hi($b[0], $t);
+                $x_1 = $x_1 + m_hi_half($b[1], $t);
 
                 let a_i = $a[0].extract($i);
                 $t = u32x8::splat(a_i);
 
-                $x_0 = x_0 + m_lo($b[0], $t) + m_hi($b[0], tp);
-                $x_1 = x_1 + m_lo_half($b[1], $t) + m_hi_half($b[1], tp);
+                $x_0 = $x_0 + m_lo($b[0], $t);
+                $x_1 = $x_1 + m_lo_half($b[1], $t);
 
                 // store x_0[0] at x[i]
                 $out[$i] = $x_0.extract(0);
@@ -227,13 +207,14 @@ pub mod avx2 {
         }
         macro_rules! round1 {
             ($i:expr, $a:expr, $b: expr, $t:expr, $out:expr, $x_0:expr, $x_1:expr) => {
-                let tp = $t;
+                $x_0 = $x_0 + m_hi($b[0], $t);
+                $x_1 = $x_1 + m_hi_half($b[1], $t);
 
                 let a_i = $a[1].extract($i - 8);
                 $t = u32x8::splat(a_i);
 
-                $x_0 = x_0 + m_lo($b[0], $t) + m_hi($b[0], tp);
-                $x_1 = x_1 + m_lo_half($b[1], $t) + m_hi_half($b[1], tp);
+                $x_0 = $x_0 + m_lo($b[0], $t);
+                $x_1 = $x_1 + m_lo_half($b[1], $t);
 
                 // store x_0[0] at x[i]
                 $out[$i] = $x_0.extract(0);
@@ -243,7 +224,21 @@ pub mod avx2 {
             };
         }
 
-        round0!(0, a, b, t, out, x_0, x_1);
+        {
+            // first round
+            let a_i = a[0].extract(0);
+            t = u32x8::splat(a_i);
+
+            x_0 = m_lo(b[0], t);
+            x_1 = m_lo_half(b[1], t);
+
+            // store x_0[0] at x[i]
+            out[0] = x_0.extract(0);
+
+            x_0 = shr32(x_0);
+            x_1 = shr32(x_1);
+        }
+
         round0!(1, a, b, t, out, x_0, x_1);
         round0!(2, a, b, t, out, x_0, x_1);
         round0!(3, a, b, t, out, x_0, x_1);
@@ -287,8 +282,7 @@ pub mod avx2 {
 
     #[inline(always)]
     fn shr32(x: u32x8) -> u32x8 {
-        let zero = u32x8::splat(0);
-        shuffle!(x, zero, [8, 0, 1, 2, 3, 4, 5, 6])
+        unsafe { _mm256_srli_epi32(x.into_bits(), 32) }.into_bits()
     }
 
     #[inline(always)]
@@ -325,71 +319,6 @@ pub mod avx2 {
     fn m_lo(x: u32x8, y: u32x8) -> u32x8 {
         unsafe { _mm256_mullo_epi32(x.into_bits(), y.into_bits()).into_bits() }
     }
-
-    // pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
-    //     #[inline(always)]
-    //     fn m(x: u32x8, y: u32x8) -> u64x4 {
-    //         unsafe { _mm256_mul_epu32(x.into_bits(), y.into_bits()).into_bits() }
-    //     }
-
-    //     let (x0, x1) = unpack_pair(a.0[0]);
-    //     let (x2, x3) = unpack_pair(a.0[1]);
-
-    //     let (y0, y1) = unpack_pair(b.0[0]);
-    //     let (y2, y3) = unpack_pair(b.0[1]);
-
-    //     let x1_2 = x1 + x1;
-    //     let x3_2 = x3 + x3;
-
-    //     // Long multiplication
-    //     // (x0, x1, x2, x3) * (y0, y1, y2, y3)
-
-    //     // c_ = 0
-    //     //
-    //     // r0 = (c_ + a0 * b0) mod D
-    //     // c0 = (c_ + a0 * b0) / D
-    //     //
-    //     // r1 = (c0 + a1 * b0 + a0 * b1) mod D
-    //     // c1 = (c0 + a1 * b0 + a0 * b1) / D
-    //     //
-    //     // r2 = (c1 + a0 * b2 + a2 * b0 + a1 * b1) mod D
-    //     // c2 = (c1 + a0 * b2 + a2 * b0 + a1 * b1) / D
-    //     //
-    //     // r3 = (c2 + a0 * b3 + a3 * b0 + a1 * b2 + a2 * b1) mod D
-    //     // c3 = (c2 + a0 * b3 + a3 * b0 + a1 * b2 + a2 * b1) / D
-    //     //
-
-    //     fn shr(x: u64x4) -> u64x4 {
-    //         unsafe { _mm256_srli_epi32(x.into_bits(), 32).into_bits() }
-    //     }
-    //     // TODO: can we avoid shifting by using a mask?
-
-    //     let z0 = m(x0, y0);
-    //     let c0 = shr(z0);
-    //     println!("z0: {:#b}", z0);
-    //     println!("c0: {:#b}", c0);
-
-    //     let z1 = c0 + m(x0, y1) + m(x1, y0);
-    //     let c1 = shr(z1);
-
-    //     let i2 = m(x0, y2) + m(x2, y0) + m(x1, y1);
-    //     let z2 = c1 + i2;
-    //     let c2 = shr(i2);
-
-    //     let z3 = c2 + m(x0, y3) + m(x3, y0) + m(x1, y2) + m(x2, y1);
-
-    //     // let z0 = m(x0, y0) + m(x1_2, y3) + m(x2, y2) + m(x3_2, y1);
-    //     // let z1 = m(x0, y1) + m(x1, y0) + m(x2, y3) + m(x3, y2);
-    //     // let z2 = m(x0, y2) + m(x1, y1) + m(x2, y0);
-    //     // let z3 = m(x0, y3) + m(x1, y2) + m(x2, y1);
-
-    //     FqUnreduced([
-    //         z0.into_bits(),
-    //         z1.into_bits(),
-    //         z2.into_bits(),
-    //         z3.into_bits(),
-    //     ])
-    // }
 
     #[cfg(test)]
     mod tests {
@@ -712,21 +641,6 @@ pub mod avx2 {
 
                 println!("{}\n{:#b}\n{:#b}", i, expected, c.extract(i));
                 assert_eq!(c.extract(i), expected);
-            }
-        }
-
-        #[test]
-        fn test_shr32() {
-            let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
-
-            let a: FqReduced = rng.gen();
-            let v = (a.0)[0];
-
-            let res = shr32(v);
-
-            assert_eq!(res.extract(0), 0);
-            for i in 1..8 {
-                assert_eq!(res.extract(i), v.extract(i - 1));
             }
         }
     }
