@@ -23,3 +23,6 @@ unstable-features = ["expose-arith"]
 expose-arith = []
 u128-support = []
 default = ["u128-support", "expose-arith"]
+
+[build-dependencies]
+cc = "*"

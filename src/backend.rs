@@ -176,6 +176,7 @@ pub mod avx2 {
 
     #[inline]
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
+        println!("\n-- mul\n\n");
         let mut out_0 = u32x8::default();
         let mut out_1 = u32x8::default();
 
@@ -188,17 +189,23 @@ pub mod avx2 {
                 $l0:expr, $l1:expr, $l2:expr, $l3:expr,
                 $l4:expr, $l5:expr, $l6:expr, $l7:expr
             ]) => {
-                $x_0 = $x_0 + m_hi($b[0], $t);
-                $x_1 = $x_1 + m_hi_half($b[1], $t);
+                println!("round {}", $i);
 
+                let tp = $t;
                 let a_i = $a.extract($i);
                 $t = u32x8::splat(a_i);
 
-                $x_0 = $x_0 + m_lo($b[0], $t);
-                $x_1 = $x_1 + m_lo_half($b[1], $t);
+                println!("tp: {:?}", tp);
+                println!("t:  {:?}", $t);
+                println!("b[0]: {:?}", $b[0]);
+                println!("b[1]: {:?}", $b[1]);
+
+                $x_0 = $x_0 + m_lo($b[0], $t) + m_hi_half($b[0], tp);
+                $x_1 = $x_1 + m_lo($b[1], $t) + m_hi_half($b[1], tp);
 
                 // store x_0[0] at x[i]
                 $out = shuffle!($out, $x_0, [$l0, $l1, $l2, $l3, $l4, $l5, $l6, $l7]);
+                println!("out_0: {:?}", $out);
 
                 $x_0 = shr32($x_0);
                 $x_1 = shr32($x_1);
@@ -207,17 +214,23 @@ pub mod avx2 {
 
         {
             // first round
+            println!("round 0");
             let a_i = a.0[0].extract(0);
             t = u32x8::splat(a_i);
 
             x_0 = m_lo(b.0[0], t);
             x_1 = m_lo_half(b.0[1], t);
+            println!("x_0: {:?} * {:?} = {:?}", b.0[0], t, x_0);
+            println!("x_1: {:?} * {:?} = {:?}", b.0[1], t, x_1);
 
             // store x_0[0] at x[i]
             out_0 = shuffle!(out_0, x_0, [8, 1, 2, 3, 4, 5, 6, 7]);
+            println!("out_0: {:?}", out_0);
 
             x_0 = shr32(x_0);
             x_1 = shr32(x_1);
+            println!("x_0 (shr32): {:?}", x_0);
+            println!("x_1 (shr32): {:?}", x_1);
         }
 
         round!(1, a.0[0], b.0, t, out_0, x_0, x_1, [0, 8, 2, 3, 4, 5, 6, 7]);
@@ -235,19 +248,18 @@ pub mod avx2 {
         round!(4, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 8, 5, 6, 7]);
         round!(5, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 8, 6, 7]);
         round!(6, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 5, 8, 7]);
+        round!(7, a.0[1], b.0, t, out_1, x_0, x_1, [0, 1, 2, 3, 4, 5, 6, 8]);
 
         {
             // last round
+            println!("round 16");
             x_0 = x_0 + m_hi(b.0[0], t);
-
-            // store x_0[0] at x[i]
-            out_1 = shuffle!(out_1, x_0, [0, 1, 2, 3, 4, 5, 6, 8]);
-            x_0 = shr32(x_0);
         }
 
         // store x_q-1..x_0 starting at x[m+1]
         // out[m..].copy_from_slice(x_0.into_bits());
 
+        println!("res: {:?}, {:?}, {:?}", out_0, out_1, x_0);
         FqUnreduced([out_0, out_1, x_0])
     }
 
@@ -516,15 +528,32 @@ pub mod avx2 {
                     ),
                     [20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                 ),
+                (
+                    (
+                        [
+                            u32x8::new(2, 2, 0, 0, 0, 0, 0, 0),
+                            u32x8::new(0, 0, 0, 0, 0, 0, 0, 0),
+                        ],
+                        [
+                            u32x8::new(2, 2, 0, 0, 0, 0, 0, 0),
+                            u32x8::new(0, 0, 0, 0, 0, 0, 0, 0),
+                        ],
+                    ),
+                    [20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ),
             ];
 
             for (i, case) in cases.into_iter().enumerate() {
                 let a = FqReduced((case.0).0);
                 let b = FqReduced((case.0).1);
+                let a_u64: u64::FqReduced = a.clone().into();
+                let b_u64: u64::FqReduced = b.clone().into();
+                println!("{:?} {:?}", a_u64, b_u64);
 
                 let res: [u64; 12] = mul(&a, &b).into();
+                let expected: [u64; 12] = backend::u64::mul(&a_u64, &b_u64).0;
 
-                assert_eq!(res, case.1, "digit {}", i);
+                assert_eq!(res, expected, "case {}", i);
             }
         }
 
@@ -667,46 +696,13 @@ pub mod avx512 {
         std::mem::transmute(simd_mul(a_i, b_i))
     }
 
+    // Layout: [[a_0, .., a_15], [a_16, .., a_23, 0, 0, 0, 0, 0, 0, 0, 0]]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FqUnreduced(pub(crate) [u32x16; 2]);
 
-    // Layout: [a_0, .., a_7, a_8, 0, a_9, 0, a_10, 0, a_11, 0]
+    // Layout: [a_0, .., a_11, 0, 0, 0, 0]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FqReduced(pub(crate) u32x16);
-
-    impl From<FqUnreduced> for [u64; 12] {
-        fn from(other: FqUnreduced) -> [u64; 12] {
-            let mut imm = [0u32; 32];
-            (other.0)[0].write_to_slice_unaligned(&mut imm[..16]);
-            (other.0)[1].write_to_slice_unaligned(&mut imm[16..]);
-
-            // now extract the low 24 bits of each u32 and combine them to u64s
-            let mut res = [0u64; 12];
-
-            #[inline(always)]
-            fn c(a: u32, b: u32) -> u64 {
-                ((b as u64) << 32) | (a as u64)
-            }
-
-            res[0] = c(imm[0], imm[1]);
-            res[1] = c(imm[2], imm[3]);
-            res[2] = c(imm[4], imm[5]);
-            res[3] = c(imm[6], imm[7]);
-
-            res[4] = c(imm[8], imm[10]);
-            res[5] = c(imm[12], imm[14]);
-
-            res[6] = c(imm[16], imm[17]);
-            res[7] = c(imm[18], imm[19]);
-            res[8] = c(imm[20], imm[21]);
-            res[9] = c(imm[22], imm[23]);
-
-            res[10] = c(imm[24], imm[26]);
-            res[11] = c(imm[28], imm[30]);
-
-            res
-        }
-    }
 
     impl ::rand::Rand for FqReduced {
         #[inline(always)]
@@ -721,12 +717,12 @@ pub mod avx512 {
                 rng.gen::<u32>(),
                 rng.gen::<u32>(),
                 rng.gen::<u32>(),
-                0,
+                rng.gen::<u32>(),
+                rng.gen::<u32>(),
                 rng.gen::<u32>(),
                 0,
-                rng.gen::<u32>(),
                 0,
-                rng.gen::<u32>(),
+                0,
                 0,
             ))
         }
@@ -769,7 +765,7 @@ pub mod avx512 {
             };
         }
 
-        // TODO: move values such that the last 4 rows are empty and see if we can skip some operations
+        // TODO: the last 4 rows are empty and see if we can skip some operations
 
         {
             // first  round
@@ -960,5 +956,34 @@ pub mod avx512 {
     #[inline]
     fn m_lo(x: u32x16, y: u32x16) -> u32x16 {
         unsafe { _mm512_mullo_epi32(x, y) }
+    }
+}
+
+pub mod asm {
+
+    extern "C" {
+        fn mul1024_vpmadd(dest: &mut [u64; 32], a: &[u64; 16], b: &[u64; 16]);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_mul1024() {
+            let mut res = [0; 32];
+            let a = [2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            let b = [2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+            unsafe { mul1024_vpmadd(&mut res, &a, &b) };
+
+            assert_eq!(
+                [
+                    4, 8, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0
+                ],
+                res,
+            );
+        }
     }
 }
