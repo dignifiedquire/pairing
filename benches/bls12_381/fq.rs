@@ -187,6 +187,25 @@ fn bench_fq_mul_raw_u64(b: &mut ::test::Bencher) {
 }
 
 #[bench]
+fn bench_fq_mul_raw_u64_alt(b: &mut ::test::Bencher) {
+    use pairing::backend::u64;
+    use rand::Rng;
+
+    const SAMPLES: usize = 1000;
+
+    let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+    let v: Vec<(u64::FqReduced, u64::FqReduced)> =
+        (0..SAMPLES).map(|_| (rng.gen(), rng.gen())).collect();
+
+    let mut count = 0;
+    b.iter(|| {
+        black_box(u64::mul_alt(&v[count].0, &v[count].1));
+        count = (count + 1) % SAMPLES;
+    });
+}
+
+#[bench]
 #[cfg(target_feature = "avx2")]
 fn bench_fq_mul_raw_avx2(b: &mut ::test::Bencher) {
     use pairing::backend::avx2;

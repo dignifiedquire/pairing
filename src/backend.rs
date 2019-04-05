@@ -1,3 +1,7 @@
+// extern "C" {
+//     fn mul1024_avx512(dest: &mut [u64; 16], a: &[u64; 8], b: &[u64; 8]);
+// }
+
 pub mod u64 {
     use *;
 
@@ -37,6 +41,22 @@ pub mod u64 {
         fn rand<R: ::rand::Rng>(rng: &mut R) -> Self {
             FqReduced(rng.gen())
         }
+    }
+
+    pub fn mul_alt(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
+        let mut a_l = [0; 8];
+        a_l[..6].copy_from_slice(&a.0);
+
+        let mut b_l = [0; 8];
+        b_l[..6].copy_from_slice(&b.0);
+
+        let mut res = [0; 16];
+        unsafe { super::avx512::mul1024(&mut res, &a_l, &b_l) };
+
+        let mut end_res = [0; 12];
+        end_res.copy_from_slice(&res[..12]);
+
+        FqUnreduced(end_res)
     }
 
     pub fn mul(a: &FqReduced, b: &FqReduced) -> FqUnreduced {
@@ -90,6 +110,28 @@ pub mod u64 {
         let r11 = carry;
 
         FqUnreduced([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11])
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        use rand::{Rng, SeedableRng, XorShiftRng};
+
+        #[test]
+        fn test_mul_extended() {
+            let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+            for i in 0..1000_0000 {
+                let a: FqReduced = rng.gen();
+                let b: FqReduced = rng.gen();
+
+                let res = mul(&a, &b);
+                let expected = mul_alt(&a, &b);
+                assert_eq!(res, expected, "case {}", i);
+            }
+        }
+
     }
 }
 
@@ -696,6 +738,83 @@ pub mod avx512 {
         std::mem::transmute(simd_mul(a_i, b_i))
     }
 
+    // -- Masks for conversion from 2^64 -> 2^29
+
+    const PERM_MASK: [u16; 32] = [
+        0, 1, 0, 0, 1, 2, 3, 0, 3, 4, 5, 0, 5, 6, 7, 0, 7, 8, 9, 0, 9, 10, 0, 0, 10, 11, 12, 0, 12,
+        13, 14, 0,
+    ];
+
+    const SHIFT_MASK: [u64; 8] = [0, 13, 10, 7, 4, 1, 14, 11];
+
+    // --Masks for conversion from 2^29 -> 2^64
+
+    const FIX_MASK_0: [u32; 16] = [0, 1, 4, 1, 8, 1, 12, 1, 16, 1, 22, 1, 26, 1, 30, 1];
+    const FIX_MASK_1: [u16; 32] = [
+        4, 5, 3, 3, 12, 13, 3, 3, 20, 21, 3, 3, 28, 29, 3, 3, 36, 37, 3, 44, 48, 49, 3, 3, 56, 57,
+        3, 3, 34, 35, 3, 3,
+    ];
+    const FIX_MASK_2: [u32; 16] = [4, 1, 8, 1, 12, 1, 16, 1, 20, 1, 26, 1, 30, 1, 19, 1];
+
+    const FIX_SHIFT_0: [u32; 16] = [4, 1, 8, 1, 12, 1, 16, 1, 20, 1, 26, 1, 30, 1, 19, 1];
+    const FIX_SHIFT_1: [u64; 8] = [29, 23, 17, 11, 5, 28, 22, 16];
+    const FIX_SHIFT_2: [u64; 8] = [58, 52, 46, 40, 34, 57, 51, 45];
+
+    const FIX_MASK3: [u32; 16] = [2, 1, 6, 1, 12, 1, 16, 1, 20, 1, 24, 1, 28, 1, 19, 1];
+    const FIX_MASK_4: [u16; 32] = [
+        8, 9, 3, 3, 16, 17, 3, 24, 28, 29, 3, 3, 36, 37, 3, 3, 44, 45, 3, 3, 52, 53, 3, 3, 60, 61,
+        3, 38, 42, 43, 3, 3,
+    ];
+
+    const FIX_MASK_5: [u32; 16] = [6, 1, 10, 1, 16, 1, 20, 1, 24, 1, 28, 1, 17, 1, 23, 1];
+    const FIX_SHIFT_3: [u64; 8] = [19, 25, 2, 8, 14, 20, 26, 3];
+    const FIX_SHIFT_4: [u64; 8] = [10, 4, 27, 21, 15, 9, 3, 26];
+    const FIX_SHIFT_5: [u64; 8] = [39, 33, 56, 50, 44, 38, 32, 55];
+
+    const FIX_MASK_6: [u32; 16] = [6, 1, 10, 1, 14, 1, 18, 1, 24, 1, 28, 1, 17, 1, 21, 1];
+    const FIX_MASK_7: [u16; 32] = [
+        16, 17, 3, 3, 24, 25, 3, 3, 32, 33, 3, 3, 40, 41, 3, 48, 52, 53, 3, 3, 60, 61, 3, 3, 38,
+        39, 3, 3, 46, 47, 3, 3,
+    ];
+    const FIX_MASK_8: [u32; 16] = [10, 1, 14, 1, 18, 1, 22, 1, 28, 1, 17, 1, 21, 1, 25, 1];
+    const FIX_SHIFT_6: [u64; 8] = [9, 15, 21, 27, 4, 10, 16, 22];
+    const FIX_SHIFT_7: [u64; 8] = [20, 14, 8, 2, 25, 19, 13, 7];
+    const FIX_SHIFT_8: [u64; 8] = [49, 43, 37, 31, 54, 48, 42, 36];
+
+    const FIX_MASK_9: [u32; 16] = [8, 1, 14, 1, 18, 1, 22, 1, 26, 1, 30, 1, 21, 1, 25, 1];
+    const FIX_MASK_10: [u16; 32] = [
+        20, 21, 3, 28, 32, 33, 3, 3, 40, 41, 3, 3, 48, 49, 3, 3, 56, 57, 3, 3, 34, 35, 3, 42, 46,
+        47, 3, 3, 54, 55, 3, 3,
+    ];
+    const FIX_MASK_11: [u32; 16] = [12, 1, 18, 1, 22, 1, 26, 1, 30, 1, 19, 1, 25, 1, 29, 1];
+    const FIX_SHIFT_9: [u64; 8] = [28, 5, 11, 17, 23, 29, 6, 12];
+    const FIX_SHIFT_10: [u64; 8] = [1, 24, 18, 12, 6, 0, 23, 17];
+    const FIX_SHIFT_11: [u64; 8] = [30, 53, 47, 41, 35, 29, 52, 46];
+
+    /// Mask for the bottom 29 bits
+    const AND_MASK: u64 = 0x1FFFFFFF;
+
+    unsafe fn mul1024_avx512(dest: &mut [u64; 16], a: &[u64; 8], b: &[u64; 8]) {
+        let zero = __mm512_setzero();
+        let mut idx = __mm512_setzero();
+
+        // -- Conversion from 2^64 -> 2^29
+        let mut shift_mask = _mm512_setzero();
+        shift_mask = _mm512_set_epi64(
+            SHIFT_MASK[0],
+            SHIFT_MASK[1],
+            SHIFT_MASK[2],
+            SHIFT_MASK[3],
+            SHIFT_MASK[4],
+            SHIFT_MASK[5],
+            SHIFT_MASK[6],
+            SHIFT_MASK[7],
+        );
+
+        let mut perm_mask = _mm512_setzero();
+        perm_mask = _mm512_set_epi64()
+    }
+
     // Layout: [[a_0, .., a_15], [a_16, .., a_23, 0, 0, 0, 0, 0, 0, 0, 0]]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FqUnreduced(pub(crate) [u32x16; 2]);
@@ -959,31 +1078,18 @@ pub mod avx512 {
     }
 }
 
-pub mod asm {
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    extern "C" {
-        fn mul1024_vpmadd(dest: &mut [u64; 32], a: &[u64; 16], b: &[u64; 16]);
-    }
+    #[test]
+    fn test_mul1024() {
+        let mut res = [0; 16];
+        let a = [2, 2, 0, 0, 0, 0, 0, 0];
+        let b = [2, 2, 0, 0, 0, 0, 0, 0];
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
+        unsafe { mul1024_avx512(&mut res, &a, &b) };
 
-        #[test]
-        fn test_mul1024() {
-            let mut res = [0; 32];
-            let a = [2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-            let b = [2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-
-            unsafe { mul1024_vpmadd(&mut res, &a, &b) };
-
-            assert_eq!(
-                [
-                    4, 8, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0
-                ],
-                res,
-            );
-        }
+        assert_eq!([4, 8, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,], res,);
     }
 }
